@@ -1,0 +1,160 @@
+{% extends "base.html" %}
+{% block title %}Manager Dashboard — WorkLog{% endblock %}
+{% block content %}
+<div class="flex flex-col gap-6">
+  <!-- Header stats -->
+  <div class="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
+    <div>
+      <h1 class="font-display text-2xl font-semibold text-ink-900">Team overview</h1>
+      <p class="text-sm text-ink-500 mt-1">All team logs • Filter by person, date, category • Today's entries first</p>
+    </div>
+    <div class="flex gap-2">
+      <div class="px-4 py-2 rounded-xl bg-white border border-ink-200 text-sm"><span class="text-ink-500">Team</span> <span class="font-semibold text-ink-900 ml-1">{{ total_members }} members</span></div>
+      <div class="px-4 py-2 rounded-xl bg-ink-900 text-white text-sm"><span class="opacity-70">Today</span> <span class="font-semibold ml-1">{{ total_today }} entries</span></div>
+    </div>
+  </div>
+
+  <!-- Filters -->
+  <div class="bg-white rounded-2xl border border-ink-200 p-4 sm:p-5">
+    <form method="get" class="grid grid-cols-2 lg:grid-cols-6 gap-3 items-end">
+      <div>
+        <label class="text-xs font-semibold tracking-widest uppercase text-ink-500">Person</label>
+        <select name="person" class="mt-1 w-full px-3 py-2.5 rounded-xl border border-ink-200 text-sm bg-white">
+          <option value="">All people</option>
+          {% for m in members %}
+          <option value="{{ m.id }}" {% if filters.person==m.id|string %}selected{% endif %}>{{ m.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label class="text-xs font-semibold tracking-widest uppercase text-ink-500">From</label>
+        <input type="date" name="date_from" value="{{ filters.date_from }}" class="mt-1 w-full px-3 py-2.5 rounded-xl border border-ink-200 text-sm">
+      </div>
+      <div>
+        <label class="text-xs font-semibold tracking-widest uppercase text-ink-500">To</label>
+        <input type="date" name="date_to" value="{{ filters.date_to }}" class="mt-1 w-full px-3 py-2.5 rounded-xl border border-ink-200 text-sm">
+      </div>
+      <div>
+        <label class="text-xs font-semibold tracking-widest uppercase text-ink-500">Category</label>
+        <select name="category" class="mt-1 w-full px-3 py-2.5 rounded-xl border border-ink-200 text-sm bg-white">
+          <option value="">All</option>
+          {% for c in categories %}
+          <option value="{{ c }}" {% if filters.category==c %}selected{% endif %}>{{ c }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="flex gap-2">
+        <button class="flex-1 py-2.5 rounded-xl bg-ink-900 text-white text-sm font-semibold">Apply</button>
+        <a href="{{ url_for('manager_dashboard') }}" class="px-4 py-2.5 rounded-xl bg-ink-50 border border-ink-200 text-sm font-medium">Clear</a>
+      </div>
+      <div class="col-span-2 lg:col-span-1 flex gap-2">
+        <div class="relative flex-1" x-data="{open:false}">
+          <button type="button" @click="open=!open" class="w-full flex items-center justify-center gap-1.5 py-2.5 rounded-xl bg-primary-600 text-white text-sm font-semibold hover:bg-primary-700">
+            ⬇ Export ▾
+          </button>
+          <div x-cloak x-show="open" @click.outside="open=false" class="absolute right-0 mt-2 w-56 bg-white rounded-xl shadow-xl border border-ink-200 p-2 z-20">
+            <a href="{{ url_for('export_excel', person=filters.person, date_from=filters.date_from, date_to=filters.date_to, category=filters.category) }}" class="flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-ink-50 text-sm"><span class="w-7 h-7 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center text-xs font-bold">X</span> Excel (.xlsx)</a>
+            <a href="{{ url_for('export_word', person=filters.person, date_from=filters.date_from, date_to=filters.date_to, category=filters.category) }}" class="flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-ink-50 text-sm"><span class="w-7 h-7 rounded-lg bg-blue-100 text-blue-700 flex items-center justify-center text-xs font-bold">W</span> Word (.docx)</a>
+            <a href="{{ url_for('export_pdf', person=filters.person, date_from=filters.date_from, date_to=filters.date_to, category=filters.category) }}" class="flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-ink-50 text-sm"><span class="w-7 h-7 rounded-lg bg-rose-100 text-rose-700 flex items-center justify-center text-xs font-bold">P</span> PDF</a>
+            <div class="text-[11px] text-ink-400 px-3 pt-2">Exports use current filters</div>
+          </div>
+        </div>
+      </div>
+    </form>
+  </div>
+
+  <!-- Totals per person -->
+  <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+    {% for m in members %}
+    <div class="bg-white rounded-2xl border border-ink-200 p-4">
+      <div class="flex items-center gap-3">
+        <div class="w-9 h-9 rounded-full bg-gradient-to-br from-primary-500 to-ink-800 flex items-center justify-center text-white text-sm font-semibold">{{ m.name[0]|upper }}</div>
+        <div class="min-w-0">
+          <div class="text-sm font-semibold text-ink-900 truncate">{{ m.name }}</div>
+          <div class="text-xs text-ink-500 truncate">{{ m.email }}</div>
+        </div>
+      </div>
+      <div class="grid grid-cols-2 gap-3 mt-3">
+        <div class="p-2.5 rounded-xl bg-ink-50 border border-ink-100">
+          <div class="text-[11px] tracking-widest font-semibold text-ink-400 uppercase">Today</div>
+          <div class="text-sm font-semibold text-ink-900">{{ (today_totals[m.name] or 0)|fmt_duration }}</div>
+        </div>
+        <div class="p-2.5 rounded-xl bg-primary-50 border border-primary-100">
+          <div class="text-[11px] tracking-widest font-semibold text-primary-700 uppercase">Last 7d</div>
+          <div class="text-sm font-semibold text-primary-900">{{ (totals_per_person_week[m.name] or 0)|fmt_duration }}</div>
+        </div>
+      </div>
+    </div>
+    {% endfor %}
+    {% if members|length==0 %}
+    <div class="col-span-full bg-amber-50 border border-amber-200 rounded-2xl p-6 text-sm text-amber-800">No team members yet. <a href="{{ url_for('manage_team') }}" class="underline font-medium">Add your first member</a>.</div>
+    {% endif %}
+  </div>
+
+  <!-- Today's entries prominent -->
+  <div class="bg-gradient-to-br from-ink-900 via-ink-800 to-primary-800 rounded-2xl p-6 text-white overflow-hidden relative">
+    <div class="absolute -right-10 -top-10 w-40 h-40 bg-white/10 rounded-full blur-2xl"></div>
+    <div class="flex flex-wrap items-center justify-between gap-3 relative">
+      <h2 class="font-display text-xl font-semibold">Today — {{ today_str }}</h2>
+      <span class="px-3 py-1.5 rounded-full bg-white text-ink-900 text-sm font-semibold">{{ today_entries|length }} entries</span>
+    </div>
+    {% if today_entries %}
+    <div class="grid md:grid-cols-2 gap-3 mt-5 relative">
+      {% for e in today_entries %}
+        {% include "_entry_card_manager.html" %}
+      {% endfor %}
+    </div>
+    {% else %}
+    <p class="text-white/70 text-sm mt-3 relative">No entries logged today yet.</p>
+    {% endif %}
+  </div>
+
+  <!-- Grouped by person → date → entries -->
+  <div>
+    <h3 class="font-semibold text-ink-900 mb-3">All logs — grouped by person & date</h3>
+    {% if grouped %}
+      <div class="space-y-4">
+        {% for person_name, dates in grouped.items() %}
+        <div class="bg-white rounded-2xl border border-ink-200 overflow-hidden" x-data="{open:true}">
+          <button @click="open=!open" class="w-full flex items-center justify-between px-5 py-4 bg-ink-50/50 hover:bg-ink-50 border-b border-ink-100">
+            <div class="flex items-center gap-3">
+              <div class="w-8 h-8 rounded-full bg-ink-900 text-white flex items-center justify-center text-sm font-semibold">{{ person_name[0]|upper }}</div>
+              <div class="text-left">
+                <div class="font-semibold text-ink-900 text-sm">{{ person_name }}</div>
+                <div class="text-xs text-ink-500">{{ dates|length }} days • {{ dates.values()|map('length')|sum }} entries • Week total {{ (totals_per_person_week[person_name] or 0)|fmt_duration }}</div>
+              </div>
+            </div>
+            <svg :class="open ? 'rotate-180' : ''" class="transition text-ink-400" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+          </button>
+          <div x-show="open" x-transition class="divide-y divide-ink-100">
+            {% for d, ents in dates.items() %}
+            <div x-data="{open: {{ 'true' if d==today_str else 'false' }} }" class="p-4">
+              <button @click="open=!open" class="w-full flex items-center justify-between">
+                <div class="flex items-center gap-2">
+                  <span class="text-sm font-semibold text-ink-800">{{ d }}</span>
+                  <span class="text-xs px-2 py-1 rounded-full bg-ink-100 border border-ink-200 text-ink-700">{{ ents|length }} entries</span>
+                  <span class="text-xs px-2 py-1 rounded-full bg-primary-50 border border-primary-100 text-primary-700">{{ (totals_per_person_day[person_name][d] or 0)|fmt_duration }}</span>
+                </div>
+                <svg :class="open ? 'rotate-180' : ''" class="transition text-ink-400" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+              </button>
+              <div x-show="open" x-cloak class="grid gap-3 mt-3">
+                {% for e in ents %}
+                  {% include "_entry_card_manager.html" %}
+                {% endfor %}
+              </div>
+              <div x-show="!open" class="mt-2 text-xs text-ink-500 line-clamp-1">{{ ents[0].title_enhanced or ents[0].title_raw }} {% if ents|length>1 %} +{{ ents|length-1 }} more{% endif %}</div>
+            </div>
+            {% endfor %}
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <div class="bg-white rounded-2xl border border-dashed border-ink-300 p-10 text-center">
+        <div class="text-ink-500 text-sm">No entries match the current filters.</div>
+        <a href="{{ url_for('manager_dashboard') }}" class="text-primary-600 text-sm font-medium hover:underline">Clear filters</a>
+      </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

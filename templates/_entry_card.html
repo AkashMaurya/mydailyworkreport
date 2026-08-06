@@ -1,0 +1,50 @@
+<div class="bg-white rounded-2xl border border-ink-200 p-4 sm:p-5 shadow-sm" id="entry-{{ e.id }}" x-data="{enhancing:false}">
+  <div class="flex items-start justify-between gap-3">
+    <div class="min-w-0 flex-1">
+      <!-- Category badge + time -->
+      <div class="flex flex-wrap items-center gap-2 text-xs">
+        {% if e.category %}
+        <span class="px-2.5 py-1 rounded-full bg-ink-900 text-white font-medium">{{ e.category }}</span>
+        {% else %}
+        <span class="px-2.5 py-1 rounded-full bg-amber-100 text-amber-800 border border-amber-200 font-medium">Uncategorized</span>
+        {% endif %}
+        <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-ink-50 border border-ink-200 text-ink-700 font-medium">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          {{ e.start_time or '—' }} – {{ e.end_time or '—' }} • {{ e.duration_minutes|fmt_duration }}
+        </span>
+        <span class="text-ink-400">{{ e.date }}</span>
+
+      </div>
+
+      <!-- Title / Description -->
+      <div>
+        <h4 class="font-semibold text-ink-900 mt-2.5 leading-tight">{{ e.title_enhanced or e.title_raw }}</h4>
+        <p class="text-sm text-ink-700 mt-1.5 whitespace-pre-wrap leading-relaxed">{{ e.description_enhanced or e.description_raw }}</p>
+      </div>
+
+
+    </div>
+
+    <!-- Actions -->
+    <div class="flex flex-col gap-1.5 shrink-0">
+      {% if not e.title_enhanced %}
+      <button
+        hx-post="{{ url_for('enhance_entry', entry_id=e.id) }}"
+        hx-target="#enhance-result-{{ e.id }}"
+        hx-swap="innerHTML"
+        hx-indicator="#enhance-spinner-{{ e.id }}"
+        @click="enhancing=true"
+        class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-primary-600 text-white text-xs font-semibold hover:bg-primary-700 shadow-sm">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
+        Enhance
+      </button>
+      <span id="enhance-spinner-{{ e.id }}" class="htmx-indicator text-xs text-ink-500">Enhancing…</span>
+      {% endif %}
+      <div id="enhance-result-{{ e.id }}"></div>
+      <a href="{{ url_for('edit_entry', entry_id=e.id) }}" class="inline-flex items-center justify-center px-3 py-1.5 rounded-full bg-white border border-ink-200 text-ink-700 text-xs font-medium hover:bg-ink-50">Edit</a>
+      <button hx-delete="{{ url_for('delete_entry', entry_id=e.id) }}" hx-target="#entry-{{ e.id }}" hx-swap="outerHTML" hx-confirm="Delete this entry? This cannot be undone." class="px-3 py-1.5 rounded-full bg-white border border-rose-200 text-rose-600 text-xs font-medium hover:bg-rose-50">Delete</button>
+    </div>
+  </div>
+</div>
+<style>.htmx-indicator{opacity:0;transition:opacity 200ms}.htmx-request .htmx-indicator{opacity:1}</style>
+

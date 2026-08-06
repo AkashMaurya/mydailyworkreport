@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}Settings — WorkLog{% endblock %}
+{% block content %}
+<div class="max-w-3xl mx-auto space-y-6">
+  <div>
+    <h1 class="font-display text-2xl font-semibold text-ink-900">Settings</h1>
+    <p class="text-sm text-ink-500 mt-1">Manage OpenRouter integration for AI enhancements.</p>
+  </div>
+
+  {% if msg %}<div class="p-4 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-sm">{{ msg }}</div>{% endif %}
+  {% if err %}<div class="p-4 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-sm">{{ err }}</div>{% endif %}
+
+  <div class="bg-white rounded-2xl border border-ink-200 shadow-sm overflow-hidden">
+    <div class="px-6 py-5 border-b border-ink-100">
+      <h3 class="font-semibold text-ink-900 flex items-center gap-2">
+        <span class="w-8 h-8 rounded-lg bg-ink-900 text-white flex items-center justify-center text-sm">◐</span>
+        OpenRouter AI Enhancement
+      </h3>
+      <p class="text-sm text-ink-500 mt-1">Your API key is stored <span class="font-semibold text-ink-700">encrypted</span> in SQLite (Fernet). Never exposed to frontend or version control. Works offline for entry creation — enhancement gracefully degrades if unavailable.</p>
+    </div>
+
+    <form method="post" class="p-6 space-y-5" hx-post="{{ url_for('manager_settings') }}" hx-target="#settings-feedback" hx-swap="innerHTML">
+      <div>
+        <label class="text-xs font-semibold tracking-widest uppercase text-ink-500">OpenRouter API Key</label>
+        {% if has_key %}
+        <div class="mt-1 flex items-center gap-2 p-3 rounded-xl bg-emerald-50 border border-emerald-200">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-emerald-600"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+          <span class="text-sm font-mono text-emerald-800">{{ masked }}</span>
+          <span class="ml-auto text-xs px-2 py-1 rounded-full bg-emerald-600 text-white font-medium">Encrypted at rest</span>
+        </div>
+        <div class="text-xs text-ink-500 mt-1.5">Leave blank to keep existing key. Paste a new key to replace.</div>
+        {% else %}
+        <div class="mt-1 p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-sm">No API key configured. Enhancements will fail until you add one.</div>
+        {% endif %}
+        <input name="openrouter_api_key" type="password" placeholder="{% if has_key %}•••••••• paste new key to replace{% else %}sk-or-v1-...{% endif %}" class="mt-2 w-full px-3.5 py-2.5 rounded-xl border border-ink-200 text-sm font-mono placeholder:text-ink-400 focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 outline-none">
+        <div class="text-xs text-ink-400 mt-1">Get a key at <a href="https://openrouter.ai/keys" target="_blank" class="underline text-primary-600">openrouter.ai/keys</a>. The app uses cheap/fast models (default gpt-4o-mini).</div>
+      </div>
+
+      <div>
+        <label class="text-xs font-semibold tracking-widest uppercase text-ink-500">Model</label>
+        <input name="openrouter_model" value="{{ model }}" placeholder="openai/gpt-4o-mini" class="mt-1 w-full px-3.5 py-2.5 rounded-xl border border-ink-200 text-sm font-mono focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 outline-none">
+        <div class="text-xs text-ink-400 mt-1">Configurable. Try <code class="px-1 py-0.5 bg-ink-100 rounded text-xs">openai/gpt-4o-mini</code>, <code class="px-1 py-0.5 bg-ink-100 rounded text-xs">anthropic/claude-3-haiku</code>, <code class="px-1 py-0.5 bg-ink-100 rounded text-xs">google/gemini-flash-1.5</code></div>
+      </div>
+
+      <div class="flex gap-3">
+        <button type="submit" class="px-5 py-2.5 rounded-xl bg-ink-900 text-white text-sm font-semibold hover:bg-ink-800">Save settings</button>
+        <a href="{{ url_for('manager_dashboard') }}" class="px-5 py-2.5 rounded-xl bg-ink-50 border border-ink-200 text-sm font-medium">Back to dashboard</a>
+      </div>
+      <div id="settings-feedback"></div>
+    </form>
+
+    <div class="px-6 pb-6">
+      <div class="rounded-xl bg-ink-50 border border-ink-200 p-4">
+        <div class="text-xs font-semibold tracking-widest uppercase text-ink-500">How enhancement works</div>
+        <ol class="mt-2 space-y-1.5 text-sm text-ink-600 list-decimal list-inside">
+          <li>Click <span class="font-medium text-ink-900">Enhance</span> on any entry — raw title & description are sent to OpenRouter.</li>
+          <li>System prompt rewrites to professional English & categorizes into 8 fixed categories; returns JSON <code class="bg-white border px-1 rounded text-xs">{enhanced_title, enhanced_description, category}</code>.</li>
+          <li>Original is <span class="font-semibold">never overwritten</span>; both versions stored. UI shows enhanced by default with toggle to raw.</li>
+          <li>If API fails or key missing: clear error, original remains visible, app degrades gracefully.</li>
+        </ol>
+      </div>
+    </div>
+  </div>
+
+  <div class="bg-white rounded-2xl border border-ink-200 p-6">
+    <h3 class="font-semibold text-ink-900">Security notes</h3>
+    <ul class="mt-2 space-y-1.5 text-sm text-ink-600 list-disc list-inside">
+      <li>Passwords hashed with <code class="bg-ink-100 px-1 rounded">bcrypt</code> before SQLite storage.</li>
+      <li>OpenRouter key encrypted with Fernet (key derived from <code class="bg-ink-100 px-1 rounded">FLASK_SECRET_KEY</code> or explicit <code class="bg-ink-100 px-1 rounded">FERNET_KEY</code>). Never in frontend, .env, or git.</li>
+      <li>Sessions expire after 8 hours (filesystem, httpOnly, SameSite=Lax).</li>
+      <li>All routes run locally; no external calls except OpenRouter on Enhance.</li>
+    </ul>
+  </div>
+</div>
+{% endblock %}

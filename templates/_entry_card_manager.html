@@ -1,0 +1,26 @@
+<div class="bg-white rounded-xl border border-ink-200 p-4 shadow-sm" id="entry-{{ e.id }}" x-data="{enhancing:false}">
+  <div class="flex items-start justify-between gap-3">
+    <div class="min-w-0 flex-1">
+      <div class="flex flex-wrap items-center gap-1.5 text-xs">
+        {% if e.category %}<span class="px-2 py-1 rounded-full bg-ink-900 text-white font-medium">{{ e.category }}</span>{% else %}<span class="px-2 py-1 rounded-full bg-amber-100 border border-amber-200 text-amber-800">Uncategorized</span>{% endif %}
+        <span class="px-2 py-1 rounded-full bg-ink-50 border border-ink-200 text-ink-700">{{ e.start_time or '—' }}–{{ e.end_time or '—' }} • {{ e.duration_minutes|fmt_duration }}</span>
+
+      </div>
+      <div>
+        <div class="font-semibold text-ink-900 mt-2 text-sm leading-tight">{{ e.title_enhanced or e.title_raw }}</div>
+        <div class="text-sm text-ink-700 mt-1 whitespace-pre-wrap leading-relaxed">{{ e.description_enhanced or e.description_raw }}</div>
+      </div>
+    </div>
+    <div class="flex flex-col gap-1 shrink-0">
+      {% if not e.title_enhanced %}
+      <button hx-post="{{ url_for('enhance_entry', entry_id=e.id) }}" hx-target="#enhance-result-{{ e.id }}" hx-swap="innerHTML" hx-indicator="#enhance-spinner-{{ e.id }}" @click="enhancing=true" class="px-3 py-1 rounded-full bg-primary-600 text-white text-xs font-semibold hover:bg-primary-700">Enhance</button>
+      <span id="enhance-spinner-{{ e.id }}" class="htmx-indicator text-xs text-ink-500">Enhancing…</span>
+      {% endif %}
+      <div id="enhance-result-{{ e.id }}"></div>
+      <a href="{{ url_for('edit_entry', entry_id=e.id) }}" class="px-3 py-1 rounded-full bg-white border border-ink-200 text-xs text-center">Edit</a>
+      <button hx-delete="{{ url_for('delete_entry', entry_id=e.id) }}" hx-target="#entry-{{ e.id }}" hx-swap="outerHTML" hx-confirm="Delete this entry?" class="px-3 py-1 rounded-full bg-white border border-rose-200 text-rose-600 text-xs">Delete</button>
+    </div>
+  </div>
+  <div class="text-xs text-ink-400 mt-2 border-t border-ink-100 pt-2">By {{ e.person_name }} • {{ e.date }} • <span class="font-mono">{{ e.person_email }}</span></div>
+</div>
+<style>.htmx-indicator{opacity:0;transition:opacity 200ms}.htmx-request .htmx-indicator{opacity:1}</style>

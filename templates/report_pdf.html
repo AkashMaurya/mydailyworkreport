@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+  *{font-family: Inter, Helvetica, Arial, sans-serif}
+  body{color:#1e293b; font-size:10pt; line-height:1.5; margin:0; padding:0}
+  .header{text-align:center; border-bottom:2px solid #1e293b; padding-bottom:14px; margin-bottom:18px}
+  .header h1{margin:0; font-size:20pt; color:#0f172a; letter-spacing:-0.02em}
+  .header .sub{color:#64748b; font-size:8pt; margin-top:4px}
+  .summary{background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:12px; margin-bottom:18px}
+  .summary h3{margin:0 0 8px 0; font-size:11pt; color:#1e293b}
+  table.summary-table{width:100%; border-collapse:collapse; font-size:8.5pt}
+  table.summary-table th{background:#1e293b; color:#fff; text-align:left; padding:6px 8px}
+  table.summary-table td{padding:6px 8px; border-bottom:1px solid #e2e8f0}
+  table.summary-table tr:nth-child(even) td{background:#f1f5f9}
+  .date-heading{font-size:12pt; color:#1e293b; border-bottom:1px solid #e2e8f0; padding-bottom:4px; margin:18px 0 10px 0}
+  .person-heading{font-size:10pt; color:#334155; margin:12px 0 6px 0; font-weight:700}
+  .entry{margin-bottom:10px; padding-left:10px; border-left:3px solid #e2e8f0; page-break-inside:avoid}
+  .entry-title{font-weight:700; font-size:9.5pt; color:#0f172a; margin:0}
+  .entry-meta{color:#64748b; font-size:7.5pt; font-style:italic; margin:2px 0}
+  .entry-desc{color:#334155; font-size:8.5pt; margin:4px 0 0 0; white-space:pre-wrap}
+  .footer{text-align:center; color:#94a3b8; font-size:7pt; border-top:1px solid #e2e8f0; padding-top:10px; margin-top:24px}
+  .badge{display:inline-block; background:#1e293b; color:#fff; font-size:7pt; padding:2px 6px; border-radius:10px; font-weight:600}
+</style>
+</head>
+<body>
+  <div class="header">
+    <h1>Daily Work Log Report</h1>
+    <div class="sub">Generated on {{ generated }} &nbsp;•&nbsp; {{ requester.name }} ({{ requester.role }}) {% if date_from or date_to %} &nbsp;•&nbsp; Period: {{ date_from or '—' }} to {{ date_to or '—' }}{% endif %}</div>
+  </div>
+
+  {% if totals %}
+  <div class="summary">
+    <h3>Summary</h3>
+    <table class="summary-table">
+      <tr><th>Team Member</th><th>Entries</th><th>Total Time</th></tr>
+      {% for pn in totals.keys()|sort %}
+      <tr><td>{{ pn }}</td><td>{{ counts[pn] }}</td><td>{{ (totals[pn] // 60) }}h {{ (totals[pn] % 60) }}m</td></tr>
+      {% endfor %}
+    </table>
+  </div>
+  {% endif %}
+
+  {% if not grouped %}
+    <p><em>No entries for selected filters.</em></p>
+  {% else %}
+    {% for d, persons in grouped.items() %}
+      <div class="date-heading">{{ d }}</div>
+      {% for pn, ents in persons.items() %}
+        <div class="person-heading">{{ pn }}</div>
+        {% for e in ents %}
+          <div class="entry">
+            <p class="entry-title">{{ e.title_enhanced or e.title_raw }}</p>
+            <p class="entry-meta">{{ e.start_time or '—' }} – {{ e.end_time or '—' }} &nbsp;•&nbsp; {{ (e.duration_minutes // 60) }}h {{ (e.duration_minutes % 60) }}m &nbsp;•&nbsp; {{ e.category or 'Uncategorized' }}</p>
+            <p class="entry-desc">{{ e.description_enhanced or e.description_raw }}</p>
+          </div>
+        {% endfor %}
+      {% endfor %}
+    {% endfor %}
+  {% endif %}
+
+  <div class="footer">— End of Report — &nbsp;•&nbsp; Confidential, internal use only</div>
+</body>
+</html>

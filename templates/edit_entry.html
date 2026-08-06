@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Edit Entry — WorkLog{% endblock %}
+{% block content %}
+<div class="max-w-2xl mx-auto">
+  <div class="bg-white rounded-2xl border border-ink-200 shadow-sm overflow-hidden">
+    <div class="px-6 py-5 border-b border-ink-100">
+      <h1 class="font-display text-xl font-semibold text-ink-900">Edit entry</h1>
+      <p class="text-sm text-ink-500 mt-1">Edit your entry details below.</p>
+    </div>
+    <form method="post" class="p-6 space-y-4" x-data="{start:'{{ entry.start_time or '' }}', end:'{{ entry.end_time or '' }}'}">
+      <div>
+        <label class="text-xs font-semibold tracking-widest uppercase text-ink-500">Date</label>
+        <input type="date" name="date" value="{{ entry.date }}" class="mt-1 w-full px-3 py-2.5 rounded-xl border border-ink-200 text-sm">
+      </div>
+      <div>
+        <label class="text-xs font-semibold tracking-widest uppercase text-ink-500">Title (raw)</label>
+        <input name="title_raw" value="{{ entry.title_raw }}" required class="mt-1 w-full px-3 py-2.5 rounded-xl border border-ink-200 text-sm">
+      </div>
+      <div>
+        <label class="text-xs font-semibold tracking-widest uppercase text-ink-500">Description (raw)</label>
+        <textarea name="description_raw" rows="5" required class="mt-1 w-full px-3 py-2.5 rounded-xl border border-ink-200 text-sm resize-none">{{ entry.description_raw }}</textarea>
+      </div>
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="text-xs font-semibold tracking-widest uppercase text-ink-500">Start</label>
+          <input type="time" name="start_time" value="{{ entry.start_time or '' }}" x-model="start" class="mt-1 w-full px-3 py-2.5 rounded-xl border border-ink-200 text-sm">
+        </div>
+        <div>
+          <label class="text-xs font-semibold tracking-widest uppercase text-ink-500">End</label>
+          <input type="time" name="end_time" value="{{ entry.end_time or '' }}" x-model="end" class="mt-1 w-full px-3 py-2.5 rounded-xl border border-ink-200 text-sm">
+        </div>
+      </div>
+      <div>
+        <label class="text-xs font-semibold tracking-widest uppercase text-ink-500">Duration (minutes)</label>
+        <input type="number" name="duration_minutes" value="{{ entry.duration_minutes }}" min="1" max="1440" class="mt-1 w-full px-3 py-2.5 rounded-xl border border-ink-200 text-sm">
+        <p class="text-xs text-ink-400 mt-1">If start/end change, update duration manually or it will be recalculated on save.</p>
+      </div>
+
+      <div class="flex gap-3 pt-2">
+        <button class="px-5 py-2.5 rounded-xl bg-ink-900 text-white text-sm font-semibold flex-1">Save changes</button>
+        <a href="{{ url_for('member_dashboard') if g.user.role!='manager' else url_for('manager_dashboard') }}" class="px-5 py-2.5 rounded-xl bg-ink-50 border border-ink-200 text-sm font-medium text-center">Cancel</a>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}
