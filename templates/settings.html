@@ -1,10 +1,15 @@
 {% extends "base.html" %}
 {% block title %}Settings — WorkLog{% endblock %}
 {% block content %}
-<div class="max-w-3xl mx-auto space-y-6">
+<div class="max-w-3xl mx-auto space-y-6" x-data="{provider: '{{ ai_provider }}'}">
   <div>
     <h1 class="font-display text-2xl font-semibold text-ink-900">Settings</h1>
-    <p class="text-sm text-ink-500 mt-1">Manage OpenRouter integration for AI enhancements.</p>
+    <p class="text-sm text-ink-500 mt-1">Manage AI provider for entry enhancements.</p>
+    <div class="mt-2 inline-flex items-center gap-2 text-xs px-3 py-1.5 rounded-full {% if ai_provider=='ollama' %}bg-emerald-50 border border-emerald-200 text-emerald-800{% else %}bg-amber-50 border border-amber-200 text-amber-800{% endif %}">
+      <span class="w-2 h-2 rounded-full {% if ai_provider=='ollama' %}bg-emerald-500{% else %}bg-amber-500{% endif %}"></span>
+      Active provider: <strong>{{ ai_provider }}</strong>
+      {% if ai_provider_source=='env' %}<span class="opacity-70">(from .env AI_PROVIDER)</span>{% elif ai_provider_source=='default' %}<span class="opacity-70">(default — set AI_PROVIDER=ollama in .env or save here)</span>{% endif %}
+    </div>
   </div>
 
   {% if msg %}<div class="p-4 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-sm">{{ msg }}</div>{% endif %}
@@ -14,32 +19,87 @@
     <div class="px-6 py-5 border-b border-ink-100">
       <h3 class="font-semibold text-ink-900 flex items-center gap-2">
         <span class="w-8 h-8 rounded-lg bg-ink-900 text-white flex items-center justify-center text-sm">◐</span>
-        OpenRouter AI Enhancement
+        AI Enhancement
       </h3>
-      <p class="text-sm text-ink-500 mt-1">Your API key is stored <span class="font-semibold text-ink-700">encrypted</span> in SQLite (Fernet). Never exposed to frontend or version control. Works offline for entry creation — enhancement gracefully degrades if unavailable.</p>
+      <p class="text-sm text-ink-500 mt-1">Choose between OpenRouter (cloud) or Ollama (local) for AI enhancements. Ollama requires no API key — it runs entirely on your machine.</p>
     </div>
 
-    <form method="post" class="p-6 space-y-5" hx-post="{{ url_for('manager_settings') }}" hx-target="#settings-feedback" hx-swap="innerHTML">
+    <form method="post" class="p-6 space-y-6" hx-post="{{ url_for('manager_settings') }}" hx-target="#settings-feedback" hx-swap="innerHTML">
+
+      <!-- Provider Toggle -->
       <div>
-        <label class="text-xs font-semibold tracking-widest uppercase text-ink-500">OpenRouter API Key</label>
-        {% if has_key %}
-        <div class="mt-1 flex items-center gap-2 p-3 rounded-xl bg-emerald-50 border border-emerald-200">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-emerald-600"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-          <span class="text-sm font-mono text-emerald-800">{{ masked }}</span>
-          <span class="ml-auto text-xs px-2 py-1 rounded-full bg-emerald-600 text-white font-medium">Encrypted at rest</span>
+        <label class="text-xs font-semibold tracking-widest uppercase text-ink-500">AI Provider</label>
+        <div class="mt-2 flex gap-3">
+          <label class="flex-1 cursor-pointer">
+            <input type="radio" name="ai_provider" value="openrouter" x-model="provider" class="sr-only peer">
+            <div class="p-4 rounded-xl border-2 border-ink-200 peer-checked:border-primary-500 peer-checked:bg-primary-50 transition text-center">
+              <div class="text-sm font-semibold text-ink-900">☁️ OpenRouter</div>
+              <div class="text-xs text-ink-500 mt-1">Cloud API — requires API key</div>
+            </div>
+          </label>
+          <label class="flex-1 cursor-pointer">
+            <input type="radio" name="ai_provider" value="ollama" x-model="provider" class="sr-only peer">
+            <div class="p-4 rounded-xl border-2 border-ink-200 peer-checked:border-primary-500 peer-checked:bg-primary-50 transition text-center">
+              <div class="text-sm font-semibold text-ink-900">🏠 Ollama (Local)</div>
+              <div class="text-xs text-ink-500 mt-1">Free — runs on your machine</div>
+            </div>
+          </label>
         </div>
-        <div class="text-xs text-ink-500 mt-1.5">Leave blank to keep existing key. Paste a new key to replace.</div>
-        {% else %}
-        <div class="mt-1 p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-sm">No API key configured. Enhancements will fail until you add one.</div>
-        {% endif %}
-        <input name="openrouter_api_key" type="password" placeholder="{% if has_key %}•••••••• paste new key to replace{% else %}sk-or-v1-...{% endif %}" class="mt-2 w-full px-3.5 py-2.5 rounded-xl border border-ink-200 text-sm font-mono placeholder:text-ink-400 focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 outline-none">
-        <div class="text-xs text-ink-400 mt-1">Get a key at <a href="https://openrouter.ai/keys" target="_blank" class="underline text-primary-600">openrouter.ai/keys</a>. The app uses cheap/fast models (default gpt-4o-mini).</div>
       </div>
 
-      <div>
-        <label class="text-xs font-semibold tracking-widest uppercase text-ink-500">Model</label>
-        <input name="openrouter_model" value="{{ model }}" placeholder="openai/gpt-4o-mini" class="mt-1 w-full px-3.5 py-2.5 rounded-xl border border-ink-200 text-sm font-mono focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 outline-none">
-        <div class="text-xs text-ink-400 mt-1">Configurable. Try <code class="px-1 py-0.5 bg-ink-100 rounded text-xs">openai/gpt-4o-mini</code>, <code class="px-1 py-0.5 bg-ink-100 rounded text-xs">anthropic/claude-3-haiku</code>, <code class="px-1 py-0.5 bg-ink-100 rounded text-xs">google/gemini-flash-1.5</code></div>
+      <!-- OpenRouter Settings -->
+      <div x-show="provider === 'openrouter'" x-transition class="space-y-5">
+        <div>
+          <label class="text-xs font-semibold tracking-widest uppercase text-ink-500">OpenRouter API Key</label>
+          {% if has_key %}
+          <div class="mt-1 flex items-center gap-2 p-3 rounded-xl bg-emerald-50 border border-emerald-200">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-emerald-600"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+            <span class="text-sm font-mono text-emerald-800">{{ masked }}</span>
+            <span class="ml-auto text-xs px-2 py-1 rounded-full bg-emerald-600 text-white font-medium">Encrypted at rest</span>
+          </div>
+          <div class="text-xs text-ink-500 mt-1.5">Leave blank to keep existing key. Paste a new key to replace.</div>
+          {% else %}
+          <div class="mt-1 p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-sm">No API key configured. Enhancements will fail until you add one.</div>
+          {% endif %}
+          <input name="openrouter_api_key" type="password" placeholder="{% if has_key %}•••••••• paste new key to replace{% else %}sk-or-v1-...{% endif %}" class="mt-2 w-full px-3.5 py-2.5 rounded-xl border border-ink-200 text-sm font-mono placeholder:text-ink-400 focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 outline-none">
+          <div class="text-xs text-ink-400 mt-1">Get a key at <a href="https://openrouter.ai/keys" target="_blank" class="underline text-primary-600">openrouter.ai/keys</a>. Default model: <code class="px-1 py-0.5 bg-ink-100 rounded text-xs">openai/gpt-4o-mini</code></div>
+        </div>
+
+        <div>
+          <label class="text-xs font-semibold tracking-widest uppercase text-ink-500">OpenRouter Model</label>
+          <input name="openrouter_model" value="{{ model }}" placeholder="openai/gpt-4o-mini" class="mt-1 w-full px-3.5 py-2.5 rounded-xl border border-ink-200 text-sm font-mono focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 outline-none">
+          <div class="text-xs text-ink-400 mt-1">Try <code class="px-1 py-0.5 bg-ink-100 rounded text-xs">openai/gpt-4o-mini</code>, <code class="px-1 py-0.5 bg-ink-100 rounded text-xs">anthropic/claude-3-haiku</code>, <code class="px-1 py-0.5 bg-ink-100 rounded text-xs">google/gemini-flash-1.5</code></div>
+        </div>
+
+        <div>
+          <label class="text-xs font-semibold tracking-widest uppercase text-ink-500">OpenRouter Base URL <span class="text-ink-400 normal-case font-normal">(optional — for proxies)</span></label>
+          <input name="openrouter_base_url" value="{{ base_url }}" placeholder="https://openrouter.ai/api/v1" class="mt-1 w-full px-3.5 py-2.5 rounded-xl border border-ink-200 text-sm font-mono focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 outline-none">
+          <div class="text-xs text-ink-400 mt-1">Default: <code class="px-1 py-0.5 bg-ink-100 rounded text-xs">https://openrouter.ai/api/v1</code>. Set this to use an OpenAI-compatible proxy (e.g. <code class="px-1 py-0.5 bg-ink-100 rounded text-xs">https://router.bynara.id/v1</code>). The save action will probe <code>/models</code> to verify the key and model name.</div>
+        </div>
+      </div>
+
+      <!-- Ollama Settings -->
+      <div x-show="provider === 'ollama'" x-transition class="space-y-5">
+        <div class="p-4 rounded-xl bg-blue-50 border border-blue-200 text-blue-800 text-sm">
+          <strong>How it works:</strong> Ollama runs AI models locally on your machine — no API key, no costs, no rate limits. Make sure Ollama is running before enhancing entries.
+          <div class="mt-2 text-xs text-blue-700">
+            1. Install: <code class="px-1 py-0.5 bg-blue-100 rounded">curl -fsSL https://ollama.com/install.sh | sh</code><br>
+            2. Pull a model: <code class="px-1 py-0.5 bg-blue-100 rounded">ollama pull {{ ollama_model }}</code><br>
+            3. Ollama starts automatically on <code class="px-1 py-0.5 bg-blue-100 rounded">http://localhost:11434</code>
+          </div>
+        </div>
+
+        <div>
+          <label class="text-xs font-semibold tracking-widest uppercase text-ink-500">Ollama Base URL</label>
+          <input name="ollama_base_url" value="{{ ollama_url }}" placeholder="http://localhost:11434" class="mt-1 w-full px-3.5 py-2.5 rounded-xl border border-ink-200 text-sm font-mono focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 outline-none">
+          <div class="text-xs text-ink-400 mt-1">Default: <code class="px-1 py-0.5 bg-ink-100 rounded text-xs">http://localhost:11434</code>. Change if Ollama runs on another machine/port.</div>
+        </div>
+
+        <div>
+          <label class="text-xs font-semibold tracking-widest uppercase text-ink-500">Ollama Model</label>
+          <input name="ollama_model" value="{{ ollama_model }}" placeholder="llama3.2" class="mt-1 w-full px-3.5 py-2.5 rounded-xl border border-ink-200 text-sm font-mono focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 outline-none">
+          <div class="text-xs text-ink-400 mt-1">Recommended: <code class="px-1 py-0.5 bg-ink-100 rounded text-xs">llama3.2</code>, <code class="px-1 py-0.5 bg-ink-100 rounded text-xs">mistral</code>, <code class="px-1 py-0.5 bg-ink-100 rounded text-xs">phi3</code>, <code class="px-1 py-0.5 bg-ink-100 rounded text-xs">gemma2</code>. Must match the name from <code class="px-1 py-0.5 bg-ink-100 rounded text-xs">ollama list</code>.</div>
+        </div>
       </div>
 
       <div class="flex gap-3">
@@ -53,8 +113,8 @@
       <div class="rounded-xl bg-ink-50 border border-ink-200 p-4">
         <div class="text-xs font-semibold tracking-widest uppercase text-ink-500">How enhancement works</div>
         <ol class="mt-2 space-y-1.5 text-sm text-ink-600 list-decimal list-inside">
-          <li>Click <span class="font-medium text-ink-900">Enhance</span> on any entry — raw title & description are sent to OpenRouter.</li>
-          <li>System prompt rewrites to professional English & categorizes into 8 fixed categories; returns JSON <code class="bg-white border px-1 rounded text-xs">{enhanced_title, enhanced_description, category}</code>.</li>
+          <li>Click <span class="font-medium text-ink-900">Enhance</span> on any entry — raw title & description are sent to the configured AI provider.</li>
+          <li>System prompt rewrites to professional English &amp; categorizes into 8 fixed categories; returns JSON <code class="bg-white border px-1 rounded text-xs">{enhanced_title, enhanced_description, category}</code>.</li>
           <li>Original is <span class="font-semibold">never overwritten</span>; both versions stored. UI shows enhanced by default with toggle to raw.</li>
           <li>If API fails or key missing: clear error, original remains visible, app degrades gracefully.</li>
         </ol>
@@ -67,8 +127,9 @@
     <ul class="mt-2 space-y-1.5 text-sm text-ink-600 list-disc list-inside">
       <li>Passwords hashed with <code class="bg-ink-100 px-1 rounded">bcrypt</code> before SQLite storage.</li>
       <li>OpenRouter key encrypted with Fernet (key derived from <code class="bg-ink-100 px-1 rounded">FLASK_SECRET_KEY</code> or explicit <code class="bg-ink-100 px-1 rounded">FERNET_KEY</code>). Never in frontend, .env, or git.</li>
+      <li>Ollama runs 100% locally — no data leaves your machine. Perfect for privacy-sensitive environments.</li>
       <li>Sessions expire after 8 hours (filesystem, httpOnly, SameSite=Lax).</li>
-      <li>All routes run locally; no external calls except OpenRouter on Enhance.</li>
+      <li>All routes run locally; external calls only to OpenRouter (if selected).</li>
     </ul>
   </div>
 </div>

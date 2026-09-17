@@ -5,6 +5,7 @@ this module is compiled with mypyc, which does not support PEP 563 string
 annotations.
 """
 
+import array
 import functools
 import hashlib
 import importlib.resources
@@ -13,10 +14,49 @@ import struct
 import warnings
 import zlib
 
+from chardet import _kernel
+from chardet._kernel import dot_packed, pack_profile
 from chardet.registry import REGISTRY, lookup_encoding
+
+#: Shared empty packed buffers for profiles scored through another path.
+#: Safe to share because nothing ever writes to a profile's packed
+#: buffers --- dot_packed only reads them, and pack_profile always
+#: returns fresh arrays.  Rebuilding these per profile allocated four
+#: throwaway arrays on the focused-profile path, which the surrounding
+#: code exists to keep allocation-free.
+_EMPTY_PACKED = (array.array("i"), array.array("i"))
+
+#: Whether _kernel was compiled into an extension for this install.
+#: The packed buffers only pay off when it was: read from C they are two
+#: contiguous int32 arrays, but read from the interpreter every element
+#: access boxes an int, which is slower than the dense list it replaced.
+#: A build with mypyc but no Cython would otherwise get the packed layout
+#: with an interpreted loop -- measured 3.5x slower than either path
+#: alone -- so profiles keep the dense table instead when it is absent.
+#:
+#: This flag makes two scoring paths and two storage shapes live in one
+#: file, and **no single test run exercises both**: a compiled run never
+#: takes the dense branch, an interpreted run never takes the packed one.
+#: Running the suite against both builds is therefore load-bearing rather
+#: than thorough --- it is the only thing standing between these branches
+#: and silently diverging.  Change either one and check the other.
+_KERNEL_COMPILED = _kernel.__file__.endswith((".so", ".pyd"))
 
 _unpack_uint32 = struct.Struct(">I").unpack_from
 _unpack_float64 = struct.Struct(">d").unpack_from
+
+# 256-entry membership table for whitespace bytes whose runs training
+# collapsed — native byte indexing under mypyc, used in the bigram-profile
+# hot loop.  Covers the ASCII whitespace bytes (space, tab, LF, VT, FF, CR)
+# plus NBSP (0xA0): training's run collapse operates on decoded text where
+# regex \s matches all of these, so Latin models carry no run weight for
+# them and an uncollapsed input run would match only unrelated models
+# where the byte happens to be a letter.  0x85 (NEL in the ISO family) is
+# deliberately absent: it decodes to the ellipsis in windows-1252, whose
+# models legitimately carry ellipsis-run weight.
+_ASCII_WHITESPACE_TABLE = bytes(
+    1 if b in (0x20, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0xA0) else 0 for b in range(256)
+)
 _V2_MAGIC = b"CMD2"
 #: rowmax.bin format: magic + SHA-256 of the matching models.bin + one
 #: 256-byte row-maxima table per model, in models.bin header order.
@@ -320,24 +360,41 @@ class BigramProfile:
     Computing this once and reusing it across all models reduces per-model
     scoring from O(n) to O(distinct_bigrams).
 
-    Stores a dense ``freq`` list of length 65536 indexed by bigram index, plus
-    a ``nonzero`` list of indices with non-zero frequency for fast iteration.
     Each bigram is weighted by its IDF (inverse document frequency) across all
     models — bigrams unique to few models get high weight, bigrams common to
-    all models get weight 1.
+    all models get weight 1.  ``nonzero`` lists the indices carrying weight,
+    in first-encounter order.
 
-    ``row_freq`` aggregates ``freq`` by lead byte (256 entries) and
+    The weights are reachable two ways, and which one a profile fills
+    depends on how it was built:
+
+    * ``idx_arr``/``val_arr`` — parallel ``array('i')`` buffers, what
+      :func:`score_with_profile` reads for a streaming profile.  Filled by
+      the streaming constructor only.
+    * ``values`` — a plain list parallel to ``nonzero``, filled by
+      :meth:`from_weighted_freq` for the small focused profiles confusion
+      resolution builds, which are scored inline instead.
+    ``row_freq`` aggregates the weights by lead byte (256 entries) and
     ``nonzero_rows`` lists the lead bytes with non-zero total; together with
     per-model row maxima (:func:`get_rowmax`) they let statistical scoring
     compute a cheap upper bound on a model's score.
+
+    **Input limit.** Weights are packed as int32, which holds any value an
+    input of at most 16 MB can produce (``255`` per occurrence against a
+    2.1-billion ceiling).  Detection truncates to ``max_bytes`` long before
+    that; construct a profile directly from a larger buffer and packing
+    raises :exc:`OverflowError`.
     """
 
     __slots__ = (
         "freq",
+        "idx_arr",
         "input_norm",
         "nonzero",
         "nonzero_rows",
         "row_freq",
+        "val_arr",
+        "values",
         "weight_sum",
     )
 
@@ -352,11 +409,11 @@ class BigramProfile:
         """
         total_bigrams = len(data) - 1
         if total_bigrams <= 0:
-            # Use empty lists (not [0]*65536) to avoid a 256KB allocation
-            # for no-op profiles.  Safe because score_with_profile returns
-            # early when input_norm == 0.0, so freq is never indexed.
+            # Empty lists, not [0]*65536: a no-op profile allocates nothing.
             self.freq: list[int] = []
             self.nonzero: list[int] = []
+            self.values: list[int] = []
+            self.idx_arr, self.val_arr = _EMPTY_PACKED
             self.row_freq: list[int] = []
             self.nonzero_rows: list[int] = []
             self.weight_sum: int = 0
@@ -368,32 +425,75 @@ class BigramProfile:
         nonzero: list[int] = []
         w_sum = 0
         for i in range(total_bigrams):
-            idx = (data[i] << 8) | data[i + 1]
+            b1 = data[i]
+            b2 = data[i + 1]
+            # Skip repeated-whitespace bigrams (equivalent to collapsing
+            # whitespace runs, which training does before counting): padding
+            # and indentation carry no encoding signal, and models trained
+            # on lossy transcodes can carry spurious weight for them.
+            if b1 == b2 and _ASCII_WHITESPACE_TABLE[b1]:
+                continue
+            idx = (b1 << 8) | b2
             w = idf[idx]
             if freq[idx] == 0:
                 nonzero.append(idx)
             freq[idx] += w
             w_sum += w
-        self._finish(freq, nonzero, w_sum)
+        # No ``values``: this path already has the dense table, and
+        # materializing a parallel list over every nonzero bigram costs
+        # more than the sparse constructor's allocation saves.
+        self._finish(freq, nonzero, [], w_sum)
 
-    def _finish(self, freq: list[int], nonzero: list[int], weight_sum: int) -> None:
+    def _finish(
+        self,
+        freq: list[int],
+        nonzero: list[int],
+        values: list[int],
+        weight_sum: int,
+    ) -> None:
         """Store the frequency data and derive the norm and row aggregates.
 
         Single finalization path shared by both constructors so pruning
         fields cannot silently diverge between them.
+
+        Exactly one of *freq* and *values* carries the weights, never both.
+        The streaming constructor passes the dense *freq* table it had to
+        build and leaves *values* empty; the sparse constructor fills
+        *values* parallel to *nonzero* and passes no table, which is what
+        lets it skip a 65536-entry allocation per call.
+
+        Neither is retained.  *freq* is read here to derive the norm, the row
+        aggregates and the packed buffers, and is then dropped -- scoring
+        reads ``idx_arr``/``val_arr`` or ``values``, never the dense table,
+        so keeping it alive would pin 512 KB per profile for nothing.
         """
-        self.freq = freq
         self.nonzero = nonzero
+        self.values = values
         self.weight_sum = weight_sum
         norm_sq = 0
         row_freq: list[int] = [0] * 256
-        for idx in nonzero:
-            v = freq[idx]
-            norm_sq += v * v
-            row_freq[idx >> 8] += v
+        if values:
+            for i in range(len(nonzero)):
+                v = values[i]
+                norm_sq += v * v
+                row_freq[nonzero[i] >> 8] += v
+        else:
+            for idx in nonzero:
+                v = freq[idx]
+                norm_sq += v * v
+                row_freq[idx >> 8] += v
         self.input_norm = math.sqrt(norm_sq)
         self.row_freq = row_freq
         self.nonzero_rows = [b1 for b1 in range(256) if row_freq[b1]]
+        # Dense profiles are scored through the packed kernel when it is
+        # compiled; sparse ones (a median of eight bigrams) are scored inline
+        # either way and skip the packing.
+        if values or not _KERNEL_COMPILED:
+            self.idx_arr, self.val_arr = _EMPTY_PACKED
+        else:
+            self.idx_arr, self.val_arr = pack_profile(nonzero, freq)
+        # Retained only when scoring will read it -- see _KERNEL_COMPILED.
+        self.freq = [] if (values or _KERNEL_COMPILED) else freq
 
     @classmethod
     def from_weighted_freq(cls, weighted_freq: dict[int, int]) -> "BigramProfile":
@@ -402,19 +502,27 @@ class BigramProfile:
         Computes ``weight_sum`` and ``input_norm`` from *weighted_freq* to
         ensure consistency between the stored fields.
 
+        Deliberately does not build the dense 65536-entry ``freq`` table
+        the streaming constructor uses.  Callers here pass a handful of
+        bigrams — confusion resolution's focused profiles hold a median of
+        eight — and allocating a 65536-element list per call cost about
+        24us, which measured as roughly 40% of the whole bigram-rescore
+        stage.  Scoring reads ``nonzero``/``values``, so the table is
+        never needed.
+
         :param weighted_freq: Mapping of bigram index to weighted count.
         :returns: A new :class:`BigramProfile` instance.
         """
         profile = cls(b"")
-        freq: list[int] = [0] * 65536
         nonzero: list[int] = []
+        values: list[int] = []
         w_sum = 0
         for idx, count in weighted_freq.items():
-            freq[idx] = count
             if count:
                 nonzero.append(idx)
+                values.append(count)
                 w_sum += count
-        profile._finish(freq, nonzero, w_sum)
+        profile._finish([], nonzero, values, w_sum)
         return profile
 
 
@@ -445,17 +553,61 @@ def score_with_profile(
         model_norm = math.sqrt(sq_sum)
     if model_norm == 0.0:
         return 0.0
-    dot = 0
-    freq = profile.freq
-    for idx in profile.nonzero:
-        dot += model[idx] * freq[idx]
+    nonzero = profile.nonzero
+    values = profile.values
+    if values:
+        # Focused confusion profiles hold a median of eight bigrams, so this
+        # branch stays inline: a call into _kernel would cost about what the
+        # loop does.  It measured 1.3% of compiled runtime.
+        dot = 0
+        for i in range(len(nonzero)):
+            dot += model[nonzero[i]] * values[i]
+    elif _KERNEL_COMPILED:
+        dot = dot_packed(profile.idx_arr, profile.val_arr, model)
+    else:
+        # No compiled kernel: the dense table beats packed buffers here,
+        # because a list returns a cached int where array('i') boxes a new one.
+        dot = 0
+        freq = profile.freq
+        for idx in nonzero:
+            dot += model[idx] * freq[idx]
     return dot / (model_norm * profile.input_norm)
+
+
+#: ADR-0005's hand-audited rare-language set, shared with the encoding-side
+#: arbitration gate in ``pipeline.postprocess``.  One set, two gates: the
+#: deployment evidence that justifies membership is recorded in the ADR and
+#: any new genuine specimen forces a re-audit of both.
+RARE_LANGUAGES: frozenset[str] = frozenset({"gd", "cy", "ga", "br"})
+
+#: The ANSI/ASCII-art pseudo-language.  Never a valid demotion target for
+#: the thin-rare band: swapping a rare label for "zxx" would tell the
+#: orchestrator the text has no linguistic content at all.
+ART_LANGUAGE = "zxx"
+
+#: The thin-margin band for ``demote_thin_rare``: inputs shorter than this
+#: are where bigram cosines stop discriminating (apostrophe-rich English
+#: snippets score as Gaelic).  The smallest genuine rare-language files in
+#: the test corpus are 253 bytes (legacy path) and 560 bytes (fill path),
+#: 2x and 4.4x above this gate; the callers in ``pipeline.language`` own
+#: the length judgment because only they know the pre-transcoding size.
+_THIN_RARE_MAX_BYTES = 128
+
+#: Maximum lead over the best prevalent-language variant for a rare win on
+#: a short input to count as noise.  Measured mislabels win by <= 0.021.
+#: This is NOT a safety floor: genuine gd/cy snippets measure 0.07+ and the
+#: nearest measured genuine escape is Welsh at 0.043, but short Breton and
+#: Irish can sit inside the band and are the accepted casualty class per
+#: ADR-0005's addendum — widening the margin widens that class.
+_THIN_RARE_MARGIN = 0.03
 
 
 def score_best_language(
     data: bytes,
     encoding: str,
     profile: BigramProfile | None = None,
+    *,
+    demote_thin_rare: bool = False,
 ) -> tuple[float, str | None]:
     """Score data against all language variants of an encoding.
 
@@ -468,8 +620,21 @@ def score_best_language(
     :param data: The raw byte data to score.
     :param encoding: The canonical encoding name to match against.
     :param profile: Optional pre-computed :class:`BigramProfile` to reuse.
-    :returns: A ``(score, language)`` tuple with the best cosine-similarity
-        score and the corresponding language code (or ``None``).
+    :param demote_thin_rare: Pass true only when the caller has judged the
+        *original* input thin (under :data:`_THIN_RARE_MAX_BYTES` before
+        any transcoding).  A :data:`RARE_LANGUAGES` winner that leads the
+        best prevalent-language variant by less than the measured noise
+        band is then reported under the prevalent language instead.  The
+        length judgment deliberately lives with the caller: this function
+        may receive transcoded bytes or a profile without its source data,
+        so ``len(data)`` here is not a reliable proxy for input size.
+        Language-fill callers pass this; encoding-ranking callers must not,
+        so that candidate ordering stays byte-identical.
+    :returns: A ``(score, language)`` tuple.  The score is always the best
+        cosine similarity across variants; the language matches it except
+        when ``demote_thin_rare`` fires, in which case the label is the
+        best prevalent-language variant's while the score remains the
+        rare winner's.
     """
     if not data and profile is None:
         return 0.0, None
@@ -484,10 +649,29 @@ def score_best_language(
 
     best_score = 0.0
     best_lang: str | None = None
+    best_prevalent = 0.0
+    best_prevalent_lang: str | None = None
     for lang, model, model_key in variants:
         s = score_with_profile(profile, model, model_key)
         if s > best_score:
             best_score = s
             best_lang = lang
+        if (
+            demote_thin_rare
+            and lang not in RARE_LANGUAGES
+            and lang != ART_LANGUAGE
+            and s > best_prevalent
+        ):
+            best_prevalent = s
+            best_prevalent_lang = lang
+
+    if (
+        demote_thin_rare
+        and best_lang is not None
+        and best_lang in RARE_LANGUAGES
+        and best_prevalent_lang is not None
+        and best_score - best_prevalent < _THIN_RARE_MARGIN
+    ):
+        best_lang = best_prevalent_lang
 
     return best_score, best_lang

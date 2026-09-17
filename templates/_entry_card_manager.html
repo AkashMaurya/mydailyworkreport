@@ -1,4 +1,4 @@
-<div class="bg-white rounded-xl border border-ink-200 p-4 shadow-sm" id="entry-{{ e.id }}" x-data="{enhancing:false}">
+<div class="bg-white rounded-xl border border-ink-200 p-4 shadow-sm" id="entry-{{ e.id }}" x-data="{enhancing:false, cooldown:0, cooldownInterval:null}" x-init="$watch('cooldown', v => { if(v > 0 && !cooldownInterval) { cooldownInterval = setInterval(() => { cooldown--; if(cooldown <= 0) { clearInterval(cooldownInterval); cooldownInterval=null; } }, 1000); } })">
   <div class="flex items-start justify-between gap-3">
     <div class="min-w-0 flex-1">
       <div class="flex flex-wrap items-center gap-1.5 text-xs">
@@ -13,7 +13,7 @@
     </div>
     <div class="flex flex-col gap-1 shrink-0">
       {% if not e.title_enhanced %}
-      <button hx-post="{{ url_for('enhance_entry', entry_id=e.id) }}" hx-target="#enhance-result-{{ e.id }}" hx-swap="innerHTML" hx-indicator="#enhance-spinner-{{ e.id }}" @click="enhancing=true" class="px-3 py-1 rounded-full bg-primary-600 text-white text-xs font-semibold hover:bg-primary-700">Enhance</button>
+      <button hx-post="{{ url_for('enhance_entry', entry_id=e.id) }}" hx-target="#enhance-result-{{ e.id }}" hx-swap="innerHTML" hx-indicator="#enhance-spinner-{{ e.id }}" @click="enhancing=true; cooldown=15" @htmx:after-request="enhancing=false" :disabled="enhancing || cooldown > 0" :class="(enhancing || cooldown > 0) ? 'opacity-50 cursor-not-allowed' : ''" class="px-3 py-1 rounded-full bg-primary-600 text-white text-xs font-semibold hover:bg-primary-700 transition disabled:opacity-50 disabled:cursor-not-allowed"><span x-show="cooldown > 0" x-text="cooldown + 's'"></span><span x-show="cooldown <= 0">Enhance</span></button>
       <span id="enhance-spinner-{{ e.id }}" class="htmx-indicator text-xs text-ink-500">Enhancing…</span>
       {% endif %}
       <div id="enhance-result-{{ e.id }}"></div>

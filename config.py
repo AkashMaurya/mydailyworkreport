@@ -19,3 +19,11 @@ class Config:
     SESSION_COOKIE_SAMESITE = "Lax"
     OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini")
     OPENROUTER_API_KEY_ENV = os.getenv("OPENROUTER_API_KEY", "")
+    # Optional: override the OpenRouter base URL (e.g. self-hosted proxy, byNara, OpenAI-compatible gateways).
+    # Defaults to the official https://openrouter.ai/api/v1 endpoint.
+    OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1").rstrip("/")
+    # AI provider selection: 'openrouter' (cloud) or 'ollama' (local). Env overrides DB default.
+    AI_PROVIDER = os.getenv("AI_PROVIDER", "").strip().lower()
+    # Ollama (local LLM) settings
+    OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+    OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3.5:4b")
