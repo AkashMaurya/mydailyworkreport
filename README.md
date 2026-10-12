@@ -16,8 +16,8 @@ A production-grade, local-first **Daily Work Log** web app for managers to track
 - Responsive, mobile-friendly logging.
 
 ### Auth & Roles
-- **Manager**: email+password login, add/remove members (name+email+password), view all logs, export, manage OpenRouter key.
-- **Team Member**: credentials created by manager (no self-signup), sees/manages only own entries.
+- **Manager**: email+password login, add/remove members (name+email+password), **create additional manager accounts**, view all logs, export, manage OpenRouter key.
+- **Team Member**: credentials created by manager (no self-signup), sees/manages only own entries, **can change own password** (current password required).
 - **bcrypt** hashing, **Flask-Session** filesystem sessions (8h TTL, httpOnly, SameSite=Lax).
 
 ### AI Enhancement (OpenRouter)
@@ -35,10 +35,48 @@ A production-grade, local-first **Daily Work Log** web app for managers to track
 - **Today’s entries prominent** (dark hero card); past days **collapsible**
 - **Totals**: per-person per-day and per-week (last 7 days, calculated from `duration_minutes`)
 
+#### The "Clear" button is view-state only (data safety)
+The **Clear** button on `/manager` (and "Clear filters" in the empty state) is a
+plain navigation link to `GET /manager`. It **only resets the active filters**
+(person / date range / category) to their defaults. It does **not** submit a
+form, call any handler, or touch the database — no user accounts, no work
+entries, no settings are ever removed or modified by it.
+
+Guard tests in `tests/test_clear_safety.py` enforce this permanently:
+- Following the actual Clear link leaves `users` and `entries` byte-identical.
+- The control must remain a plain `<a href="/manager">` — the test fails if
+  anyone rewires it to a POST/HTMX destructive verb or an `onclick` handler.
+- No bulk "clear/purge/wipe" route may exist in the app.
+- The two intentional destructive actions (single-entry **Delete**, and
+  **Remove** on `/manager/team`) are covered separately so they keep their
+  designed behavior and reject malformed input without crashing.
+
 ### Exports (filtered, downloadable)
 - **Excel (.xlsx)**: one row per entry — Date, Person, Title, Description, Category, Start, End, Duration
 - **Word (.docx)**: per-day report grouped by person — heading=date, subheading=person, formatted official document
 - **PDF**: same structure as Word (pdfkit → wkhtmltopdf, with ReportLab fallback if binary missing)
+
+### Combined Team Report (manager view) — `/manager/team-report`
+Merges **all team members' submissions into one document, grouped person-first**
+(every entry labeled with the member's name, then by date). Available:
+- **On-page view**: summary table (entries + total time per member, grand total)
+  and a collapsible section per member using the standard entry cards.
+  Honors the same person/date/category filters as the dashboard.
+- **Three exports**, each keeping members clearly separated and identifiable:
+  - **Excel**: `Summary` sheet (per-member totals) + **one sheet per member**
+    (name in the title cell, their entries only). Sheet titles are sanitized
+    (≤31 chars, illegal characters replaced, duplicates suffixed).
+  - **Word**: Heading 1 = team member (with entry count + total time),
+    Heading 2 = date, entries as bullets beneath.
+  - **PDF**: person-first HTML template (`report_team_pdf.html`) rendered via
+    pdfkit, with a ReportLab fallback mirroring the same structure.
+- **Empty/missing submissions**: the page shows an empty state and every
+  export still returns a valid file containing
+  "No entries found for the selected filters."
+- Access: **manager only** (routes are `@manager_required`; members get 403).
+
+Entry points: **Combined report** button in the `/manager` header and the
+top item of the dashboard's Export dropdown (filters are carried over).
 
 ### Design & UX
 - Calm, minimal, trustworthy aesthetic — **slate + indigo + emerald**, custom palette (not generic cream/terracotta or dark/neon)
@@ -122,6 +160,12 @@ flask --app app run --host 0.0.0.0 --port 5000 --debug
 ├── instance/
 │   ├── worklog.db         # SQLite (created on first run)
 │   └── flask_session/     # Filesystem sessions
+├── tests/                 # pytest suite (runs on a temp DB — never touches instance/worklog.db)
+│   ├── conftest.py        # temp DATABASE_PATH/session dir, auth & seed fixtures
+│   ├── test_clear_safety.py      # Change 1: Clear button data-protection guards
+│   ├── test_manage_team.py       # Change 3: member/manager account creation
+│   ├── test_account_passwords.py # Change 3: hashing, current-password check, rejection
+│   └── test_team_report.py       # Change 2: merge logic + Excel/Word/PDF exports
 └── templates/
     ├── base.html
     ├── login.html
@@ -129,10 +173,13 @@ flask --app app run --host 0.0.0.0 --port 5000 --debug
     ├── manager_dashboard.html
     ├── _entry_card.html          # member entry card (with HTMX enhance)
     ├── _entry_card_manager.html  # manager variant
-    ├── manage_team.html
+    ├── manage_team.html          # members + add-manager form
+    ├── change_password.html      # self-service password change
+    ├── team_report.html          # combined team report (person-first)
     ├── settings.html
     ├── edit_entry.html
-    ├── report_pdf.html     # HTML for pdfkit
+    ├── report_pdf.html           # HTML for pdfkit (date-first export)
+    ├── report_team_pdf.html      # HTML for pdfkit (combined report, person-first)
     └── error.html
 ```
 
@@ -163,8 +210,10 @@ See `db.py:SCHEMA` for authoritative definition. WAL + FK enabled.
 | GET/POST | `/login` | — | Session login |
 | GET | `/logout` | — | Clear session |
 | GET | `/manager` | manager | Dashboard (filters: person, date_from, date_to, category) |
-| GET/POST | `/manager/team` | manager | Add/remove/reset PW |
+| GET/POST | `/manager/team` | manager | Add members/managers, remove, reset PW (POST-only, `role` whitelisted) |
+| GET | `/manager/team-report` | manager | Combined team report (person-first, filters) |
 | GET/POST | `/manager/settings` | manager | Encrypted OpenRouter key + model |
+| GET/POST | `/account/password` | any | Self-service password change (current password required) |
 | GET | `/dashboard` | member | Own logs (same filters) |
 | POST | `/entries` | any | Create (manual or timer) |
 | GET/POST | `/entries/<id>/edit` | owner/manager | Edit raw + date/time |
@@ -173,9 +222,50 @@ See `db.py:SCHEMA` for authoritative definition. WAL + FK enabled.
 | GET | `/export/excel` | any (scoped) | Filtered .xlsx |
 | GET | `/export/word` | any (scoped) | Filtered .docx |
 | GET | `/export/pdf` | any (scoped) | Filtered .pdf (pdfkit → ReportLab fallback) |
+| GET | `/export/team/excel` | manager | Combined team report .xlsx (Summary + sheet per member) |
+| GET | `/export/team/word` | manager | Combined team report .docx (member sections) |
+| GET | `/export/team/pdf` | manager | Combined team report .pdf (person-first) |
 | GET | `/api/health` | — | Health check |
 
 ---
+
+## Testing
+
+The project uses **pytest**. The suite runs against a **temporary database and
+session directory** (set in `tests/conftest.py` before the app is imported), so
+**`instance/worklog.db` is never read or written by tests**.
+
+```bash
+# install (already in requirements.txt)
+pip install -r requirements.txt
+
+# run everything
+python -m pytest tests -v
+
+# run one area
+python -m pytest tests/test_clear_safety.py -v      # Change 1: data-safety guards
+python -m pytest tests/test_team_report.py -v       # Change 2: combined report
+python -m pytest tests/test_account_passwords.py -v # Change 3: passwords
+python -m pytest tests/test_manage_team.py -v       # Change 3: account creation
+```
+
+What the suites protect:
+- **`test_clear_safety.py`** — following the `/manager` **Clear** link leaves
+  every user and entry byte-identical; the control must remain a plain
+  `GET /manager` anchor (no POST/HTMX/onclick); no bulk clear/purge route may
+  exist; the intentional destructive actions (entry Delete, Remove member) keep
+  their designed behavior and reject malformed input without 500s.
+- **`test_team_report.py`** — merge groups person-first with correct labels and
+  totals; Excel/Word/PDF exports contain each member's entries in clearly
+  separated, labeled sections; empty submissions yield valid empty reports;
+  non-managers are rejected with 403.
+- **`test_account_passwords.py`** — passwords stored as bcrypt hashes (never
+  plaintext); a change requires the correct current password; wrong current
+  password, mismatched/short/new-as-old passwords are rejected with **no DB
+  write**; new password works at login, old one does not.
+- **`test_manage_team.py`** — managers can create manager accounts; member
+  creation and its validations still work; forged `role` values fall back to
+  `member`; non-managers get 403.
 
 ## Security & Compliance
 

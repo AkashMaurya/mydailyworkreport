@@ -824,6 +824,10 @@ def manage_team():
             name = request.form.get("name", "").strip()
             email = request.form.get("email", "").strip().lower()
             password = request.form.get("password", "")
+            # Role is chosen by the (already manager-gated) form; whitelist it.
+            role = request.form.get("role", "member").strip().lower()
+            if role not in ("member", "manager"):
+                role = "member"
             if not name or not email or not password:
                 err = "All fields are required."
             elif len(password) < 6:
@@ -834,26 +838,35 @@ def manage_team():
                 conn = get_connection()
                 try:
                     conn.execute("INSERT INTO users(name,email,password_hash,role,created_by) VALUES(?,?,?,?,?)",
-                        (name, email, hash_password(password), "member", g.user["id"]))
+                        (name, email, hash_password(password), role, g.user["id"]))
                     conn.commit()
-                    msg = f"Team member {name} added."
+                    msg = f"Manager {name} added." if role == "manager" else f"Team member {name} added."
                 except sqlite3.IntegrityError:
                     err = "Email already exists."
                 finally:
                     conn.close()
         elif action == "remove":
-            uid = request.form.get("user_id")
-            if uid:
-                if int(uid) == g.user["id"]:
-                    err = "Cannot remove yourself."
-                else:
-                    conn = get_connection()
-                    try:
-                        conn.execute("DELETE FROM users WHERE id=? AND role='member'", (uid,))
-                        conn.commit()
+            uid_raw = request.form.get("user_id", "")
+            try:
+                uid = int(uid_raw)
+            except (TypeError, ValueError):
+                uid = None
+            if uid is None:
+                err = "Invalid team member selected."
+            elif uid == g.user["id"]:
+                err = "Cannot remove yourself."
+            else:
+                conn = get_connection()
+                try:
+                    # Scope to role='member' so managers can never be removed here.
+                    cur = conn.execute("DELETE FROM users WHERE id=? AND role='member'", (uid,))
+                    conn.commit()
+                    if cur.rowcount:
                         msg = "Team member removed."
-                    finally:
-                        conn.close()
+                    else:
+                        err = "Team member not found."
+                finally:
+                    conn.close()
         elif action == "reset_pw":
             uid = request.form.get("user_id")
             new_pw = request.form.get("new_password", "")
@@ -874,6 +887,41 @@ def manage_team():
         return render_template("manage_team.html", members=members, managers=managers, msg=msg, err=err)
     finally:
         conn.close()
+
+@app.route("/account/password", methods=["GET", "POST"])
+@login_required
+def change_password():
+    """Self-service password change for any logged-in user (manager or member).
+
+    Requires the current password (bcrypt-verified) before any write.
+    On wrong current password or validation failure, nothing is stored.
+    """
+    msg = None
+    err = None
+    if request.method == "POST":
+        current_pw = request.form.get("current_password", "")
+        new_pw = request.form.get("new_password", "")
+        confirm_pw = request.form.get("confirm_password", "")
+        if not current_pw or not new_pw or not confirm_pw:
+            err = "All fields are required."
+        elif not check_password(current_pw, g.user["password_hash"]):
+            err = "Current password is incorrect."
+        elif len(new_pw) < 6:
+            err = "New password must be at least 6 characters."
+        elif new_pw != confirm_pw:
+            err = "New passwords do not match."
+        elif check_password(new_pw, g.user["password_hash"]):
+            err = "New password must be different from the current password."
+        else:
+            conn = get_connection()
+            try:
+                conn.execute("UPDATE users SET password_hash=? WHERE id=?",
+                    (hash_password(new_pw), g.user["id"]))
+                conn.commit()
+                msg = "Password updated successfully."
+            finally:
+                conn.close()
+    return render_template("change_password.html", msg=msg, err=err)
 
 @app.route("/manager/settings", methods=["GET", "POST"])
 @login_required
@@ -1379,6 +1427,45 @@ def fetch_entries_for_export(person=None, date_from=None, date_to=None, category
     finally:
         conn.close()
 
+def build_team_report(entries):
+    """Merge team submissions into one person-first report structure.
+
+    Returns ``(grouped, totals, counts)`` where ``grouped`` maps
+    person name -> {date -> [entries]}, persons ordered alphabetically and
+    dates chronologically. Every entry keeps its ``person_name`` label so each
+    person's submissions stay clearly separated and identifiable.
+    """
+    from collections import OrderedDict, defaultdict
+    ordered = sorted(entries, key=lambda e: (
+        e.get("person_name") or "", e.get("date") or "", e.get("start_time") or ""
+    ))
+    grouped = OrderedDict()
+    totals = defaultdict(int)
+    counts = defaultdict(int)
+    for e in ordered:
+        pn = e["person_name"]
+        grouped.setdefault(pn, OrderedDict()).setdefault(e["date"], []).append(e)
+        totals[pn] += e["duration_minutes"] or 0
+        counts[pn] += 1
+    return grouped, totals, counts
+
+def excel_sheet_title(name, used):
+    """Return a valid, unique Excel sheet title for a person name.
+
+    Excel forbids ``\\ / : * ? [ ]`` in sheet names, caps titles at 31
+    characters, and rejects duplicates — all handled here.
+    """
+    safe = re.sub(r'[\\/*?:\[\]]', "-", name).strip() or "Sheet"
+    safe = safe[:31]
+    title = safe
+    n = 2
+    while title in used:
+        suffix = " (%d)" % n
+        title = safe[:31 - len(suffix)] + suffix
+        n += 1
+    used.add(title)
+    return title
+
 @app.route("/export/excel")
 @login_required
 def export_excel():
@@ -1742,6 +1829,397 @@ def export_pdf():
         doc.build(story)
         bio.seek(0)
         fname = f"worklog_report_{date.today().isoformat()}.pdf"
+        return send_file(bio, as_attachment=True, download_name=fname, mimetype="application/pdf")
+    except Exception as e:
+        return f"PDF generation failed: {e}. Try Word export instead. (Install wkhtmltopdf for best results.)", 500
+
+# ---------- Combined Team Report (person-first, manager view) ----------
+
+def _team_export_params():
+    """Read shared filter query params for the combined team report."""
+    return (
+        request.args.get("person") or None,
+        request.args.get("date_from") or None,
+        request.args.get("date_to") or None,
+        request.args.get("category") or None,
+    )
+
+@app.route("/manager/team-report")
+@login_required
+@manager_required
+def team_report():
+    """Combined team report: all members' submissions merged, person-first."""
+    person, date_from, date_to, category = _team_export_params()
+    entries = fetch_entries_for_export(person, date_from, date_to, category, g.user)
+    grouped, totals, counts = build_team_report(entries)
+    conn = get_connection()
+    try:
+        members = conn.execute("SELECT id, name FROM users WHERE role='member' ORDER BY name").fetchall()
+    finally:
+        conn.close()
+    return render_template("team_report.html",
+        entries=entries, grouped=grouped, totals=totals, counts=counts,
+        members=members, categories=CATEGORIES,
+        filters={"person": person or "", "date_from": date_from or "",
+                 "date_to": date_to or "", "category": category or ""},
+    )
+
+@app.route("/export/team/excel")
+@login_required
+@manager_required
+def export_team_excel():
+    """Combined team report as .xlsx: Summary sheet + one sheet per member."""
+    person, date_from, date_to, category = _team_export_params()
+    entries = fetch_entries_for_export(person, date_from, date_to, category, g.user)
+    grouped, totals, counts = build_team_report(entries)
+
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+
+    wb = Workbook()
+    header_fill = PatternFill(start_color="1E293B", end_color="1E293B", fill_type="solid")
+    header_font = Font(color="FFFFFF", bold=True, size=10)
+    thin = Side(style="thin", color="E2E8F0")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    def style_header(ws, header_row, ncols):
+        for col in range(1, ncols + 1):
+            c = ws.cell(row=header_row, column=col)
+            c.fill = header_fill
+            c.font = header_font
+            c.alignment = Alignment(horizontal="center", vertical="center")
+            c.border = border
+        ws.row_dimensions[header_row].height = 22
+
+    # --- Summary sheet ---
+    ws = wb.active
+    ws.title = "Summary"
+    headers = ["Team Member", "Entries", "Total Time (min)", "Total Time"]
+    ws.append(headers)
+    style_header(ws, 1, len(headers))
+    if entries:
+        for pn in sorted(totals.keys()):
+            ws.append([pn, counts[pn], totals[pn], format_duration(totals[pn])])
+        grand_n = sum(counts.values())
+        grand_m = sum(totals.values())
+        ws.append(["Grand total", grand_n, grand_m, format_duration(grand_m)])
+        last = ws[ws.max_row]
+        for cell in last:
+            cell.font = Font(bold=True, size=9, color="0F172A")
+            cell.border = border
+    else:
+        ws.append(["No entries found for the selected filters.", "", "", ""])
+        ws.cell(row=2, column=1).font = Font(italic=True, size=9, color="64748B")
+    for r in range(2, ws.max_row + 1):
+        for c in range(1, len(headers) + 1):
+            cell = ws.cell(row=r, column=c)
+            if not (entries and r == ws.max_row):
+                cell.font = Font(size=9, color="334155")
+            cell.border = border
+            cell.alignment = Alignment(vertical="center")
+    for i, w in enumerate([24, 10, 17, 14], 1):
+        ws.column_dimensions[ws.cell(row=1, column=i).column_letter].width = w
+    ws.freeze_panes = "A2"
+
+    # --- One clearly-labeled sheet per team member ---
+    used = {"Summary"}
+    entry_headers = ["Date", "Title", "Description", "Category",
+                     "Start Time", "End Time", "Duration (min)", "Duration"]
+    for pn, dates in grouped.items():
+        ws = wb.create_sheet(excel_sheet_title(pn, used))
+        # Identity rows: who this sheet belongs to
+        ws.append([pn])
+        ws.append(["%d entries  •  %s" % (counts[pn], format_duration(totals[pn]))])
+        ws.append([])
+        ws.append(entry_headers)
+        style_header(ws, 4, len(entry_headers))
+        ws["A1"].font = Font(bold=True, size=13, color="0F172A")
+        ws["A2"].font = Font(size=9, italic=True, color="64748B")
+        for d, ents in dates.items():
+            for e in ents:
+                ws.append([
+                    e["date"],
+                    e["title_enhanced"] or e["title_raw"],
+                    e["description_enhanced"] or e["description_raw"],
+                    e["category"] or "—",
+                    e["start_time"] or "—",
+                    e["end_time"] or "—",
+                    e["duration_minutes"],
+                    format_duration(e["duration_minutes"]),
+                ])
+        for r in range(5, ws.max_row + 1):
+            ws.row_dimensions[r].height = 18
+            for c in range(1, len(entry_headers) + 1):
+                cell = ws.cell(row=r, column=c)
+                cell.font = Font(size=9, color="334155")
+                cell.border = border
+                cell.alignment = Alignment(vertical="center",
+                                           wrap_text=True if c in (2, 3) else False)
+        for i, w in enumerate([12, 30, 50, 16, 11, 11, 14, 12], 1):
+            ws.column_dimensions[ws.cell(row=4, column=i).column_letter].width = w
+        ws.freeze_panes = "A5"
+        ws.auto_filter.ref = "A4:H%d" % ws.max_row
+
+    bio = BytesIO()
+    wb.save(bio)
+    bio.seek(0)
+    fname = f"team_report_{date.today().isoformat()}.xlsx"
+    if date_from or date_to:
+        fname = f"team_report_{date_from or 'start'}_to_{date_to or 'end'}.xlsx"
+    return send_file(bio, as_attachment=True, download_name=fname,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+@app.route("/export/team/word")
+@login_required
+@manager_required
+def export_team_word():
+    """Combined team report as .docx: one section per member, then by date."""
+    person, date_from, date_to, category = _team_export_params()
+    entries = fetch_entries_for_export(person, date_from, date_to, category, g.user)
+    grouped, totals, counts = build_team_report(entries)
+
+    from docx import Document
+    from docx.shared import Pt, Inches, RGBColor
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+    doc = Document()
+    style = doc.styles['Normal']
+    style.font.name = 'Calibri'
+    style.font.size = Pt(9)
+    style.paragraph_format.space_after = Pt(4)
+    for section in doc.sections:
+        section.top_margin = Inches(0.6)
+        section.bottom_margin = Inches(0.6)
+        section.left_margin = Inches(0.7)
+        section.right_margin = Inches(0.7)
+
+    title = doc.add_heading('Combined Team Work Report', level=0)
+    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    for run in title.runs:
+        run.font.color.rgb = RGBColor(30, 41, 59)
+        run.font.size = Pt(22)
+    subtitle = doc.add_paragraph()
+    subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    run = subtitle.add_run(
+        f"Generated on {datetime.now().strftime('%B %d, %Y at %I:%M %p')}  •  "
+        f"{g.user['name']} ({g.user['role']})"
+    )
+    run.font.size = Pt(9)
+    run.font.color.rgb = RGBColor(100, 116, 139)
+    if date_from or date_to:
+        p = doc.add_paragraph()
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        r = p.add_run(f"Period: {date_from or '—'}  to  {date_to or '—'}")
+        r.font.size = Pt(9)
+        r.font.color.rgb = RGBColor(71, 85, 105)
+        r.bold = True
+
+    # Summary table (per person)
+    if entries:
+        doc.add_paragraph()
+        h = doc.add_heading('Summary', level=1)
+        for run in h.runs:
+            run.font.color.rgb = RGBColor(30, 41, 59)
+        table = doc.add_table(rows=1, cols=3)
+        table.style = 'Light Shading Accent 1'
+        hdr = table.rows[0].cells
+        hdr[0].text = 'Team Member'
+        hdr[1].text = 'Entries'
+        hdr[2].text = 'Total Time'
+        for cell in hdr:
+            for p in cell.paragraphs:
+                for r in p.runs:
+                    r.bold = True
+                    r.font.size = Pt(9)
+        for pn in sorted(totals.keys()):
+            cells = table.add_row().cells
+            cells[0].text = pn
+            cells[1].text = str(counts[pn])
+            cells[2].text = format_duration(totals[pn])
+            for c in cells:
+                for p in c.paragraphs:
+                    for r in p.runs:
+                        r.font.size = Pt(9)
+
+    doc.add_paragraph()
+
+    if not entries:
+        p = doc.add_paragraph("No entries found for the selected filters.")
+        p.italic = True
+    else:
+        # Person-first: Heading 1 = team member, Heading 2 = date
+        for pn, dates in grouped.items():
+            h1 = doc.add_heading(pn, level=1)
+            for run in h1.runs:
+                run.font.color.rgb = RGBColor(30, 41, 59)
+                run.font.size = Pt(15)
+            sub = doc.add_paragraph()
+            r = sub.add_run(f"{counts[pn]} entries  •  {format_duration(totals[pn])} total")
+            r.font.size = Pt(9)
+            r.font.color.rgb = RGBColor(100, 116, 139)
+            r.italic = True
+            for d, ents in dates.items():
+                try:
+                    dt = datetime.strptime(d, "%Y-%m-%d")
+                    date_label = dt.strftime("%A, %B %d, %Y")
+                except ValueError:
+                    date_label = d
+                h2 = doc.add_heading(date_label, level=2)
+                for run in h2.runs:
+                    run.font.color.rgb = RGBColor(71, 85, 105)
+                    run.font.size = Pt(11)
+                for e in ents:
+                    e_title = e["title_enhanced"] or e["title_raw"]
+                    e_desc = e["description_enhanced"] or e["description_raw"]
+                    cat = e["category"] or "Uncategorized"
+                    times = f"{e['start_time'] or '—'} – {e['end_time'] or '—'}"
+                    dur = format_duration(e["duration_minutes"])
+                    p = doc.add_paragraph()
+                    p.style = doc.styles['List Bullet']
+                    r = p.add_run(e_title)
+                    r.bold = True
+                    r.font.size = Pt(10)
+                    r.font.color.rgb = RGBColor(15, 23, 42)
+                    meta = doc.add_paragraph()
+                    meta.paragraph_format.left_indent = Inches(0.25)
+                    meta.paragraph_format.space_after = Pt(2)
+                    r = meta.add_run(f"{times}  •  {dur}  •  {cat}")
+                    r.font.size = Pt(8)
+                    r.font.color.rgb = RGBColor(100, 116, 139)
+                    r.italic = True
+                    dpara = doc.add_paragraph()
+                    dpara.paragraph_format.left_indent = Inches(0.25)
+                    r = dpara.add_run(e_desc)
+                    r.font.size = Pt(9)
+                    r.font.color.rgb = RGBColor(51, 65, 85)
+                doc.add_paragraph()
+            doc.add_paragraph()
+
+    footer = doc.add_paragraph()
+    footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    r = footer.add_run("— End of Report —  •  Confidential, internal use only")
+    r.font.size = Pt(8)
+    r.font.color.rgb = RGBColor(148, 163, 184)
+    r.italic = True
+
+    bio = BytesIO()
+    doc.save(bio)
+    bio.seek(0)
+    fname = f"team_report_{date.today().isoformat()}.docx"
+    return send_file(bio, as_attachment=True, download_name=fname,
+        mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+
+@app.route("/export/team/pdf")
+@login_required
+@manager_required
+def export_team_pdf():
+    """Combined team report as .pdf (pdfkit → ReportLab fallback)."""
+    person, date_from, date_to, category = _team_export_params()
+    entries = fetch_entries_for_export(person, date_from, date_to, category, g.user)
+    grouped, totals, counts = build_team_report(entries)
+
+    html = render_template("report_team_pdf.html",
+        entries=entries, grouped=grouped, totals=totals, counts=counts,
+        date_from=date_from, date_to=date_to,
+        generated=datetime.now().strftime("%B %d, %Y at %I:%M %p"),
+        requester=g.user,
+    )
+
+    try:
+        import pdfkit
+        pdf_bytes = pdfkit.from_string(html, False, options={
+            'enable-local-file-access': '',
+            'page-size': 'A4',
+            'margin-top': '12mm',
+            'margin-bottom': '12mm',
+            'margin-left': '12mm',
+            'margin-right': '12mm',
+            'encoding': 'UTF-8'
+        })
+        if pdf_bytes:
+            bio = BytesIO(pdf_bytes)
+            fname = f"team_report_{date.today().isoformat()}.pdf"
+            return send_file(bio, as_attachment=True, download_name=fname, mimetype="application/pdf")
+    except Exception as e:
+        print(f"pdfkit failed: {e}, falling back to reportlab")
+
+    try:
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib.units import mm
+        from reportlab.lib.colors import HexColor
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
+        from reportlab.lib.enums import TA_LEFT, TA_CENTER
+
+        bio = BytesIO()
+        doc = SimpleDocTemplate(bio, pagesize=A4, topMargin=18*mm, bottomMargin=18*mm,
+                                leftMargin=14*mm, rightMargin=14*mm,
+                                title="Combined Team Work Report", author=g.user["name"])
+        styles = getSampleStyleSheet()
+        sTitle = ParagraphStyle('Title', parent=styles['Title'], fontSize=18, textColor=HexColor("#1E293B"), alignment=TA_CENTER, spaceAfter=4)
+        sSub = ParagraphStyle('Sub', parent=styles['Normal'], fontSize=8, textColor=HexColor("#64748B"), alignment=TA_CENTER, spaceAfter=6)
+        sH1 = ParagraphStyle('H1', parent=styles['Heading1'], fontSize=12, textColor=HexColor("#1E293B"), spaceBefore=12, spaceAfter=6)
+        sH2 = ParagraphStyle('H2', parent=styles['Heading2'], fontSize=10, textColor=HexColor("#475569"), spaceBefore=8, spaceAfter=4)
+        sBody = ParagraphStyle('Body', parent=styles['Normal'], fontSize=8.5, textColor=HexColor("#334155"), leading=12, spaceAfter=4)
+        sMeta = ParagraphStyle('Meta', parent=styles['Normal'], fontSize=7.5, textColor=HexColor("#64748B"), leading=10, spaceAfter=2)
+        story = []
+        story.append(Paragraph("Combined Team Work Report", sTitle))
+        story.append(Paragraph(f"Generated on {datetime.now().strftime('%B %d, %Y at %I:%M %p')} &nbsp;•&nbsp; {g.user['name']} ({g.user['role']})", sSub))
+        if date_from or date_to:
+            story.append(Paragraph(f"Period: {date_from or '—'} to {date_to or '—'}", sSub))
+        story.append(HRFlowable(width="100%", thickness=0.5, color=HexColor("#E2E8F0"), spaceAfter=8, spaceBefore=4))
+        if entries:
+            story.append(Paragraph("Summary", sH1))
+            data = [["Team Member", "Entries", "Total Time"]]
+            for pn in sorted(totals.keys()):
+                data.append([pn, str(counts[pn]), format_duration(totals[pn])])
+            t = Table(data, colWidths=[80*mm, 30*mm, 40*mm])
+            t.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), HexColor("#1E293B")),
+                ('TEXTCOLOR', (0, 0), (-1, 0), HexColor("#FFFFFF")),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, -1), 8),
+                ('ALIGN', (1, 0), (-1, -1), 'CENTER'),
+                ('GRID', (0, 0), (-1, -1), 0.5, HexColor("#E2E8F0")),
+                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [HexColor("#FFFFFF"), HexColor("#F8FAFC")]),
+                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                ('LEFTPADDING', (0, 0), (-1, -1), 6),
+                ('RIGHTPADDING', (0, 0), (-1, -1), 6),
+                ('TOPPADDING', (0, 0), (-1, -1), 4),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+            ]))
+            story.append(t)
+            story.append(Spacer(1, 6*mm))
+            # Person-first sections
+            for pn, dates in grouped.items():
+                story.append(Paragraph(f"{pn} — {counts[pn]} entries, {format_duration(totals[pn])}", sH1))
+                story.append(HRFlowable(width="100%", thickness=0.7, color=HexColor("#E2E8F0"), spaceAfter=4))
+                for d, ents in dates.items():
+                    try:
+                        dt = datetime.strptime(d, "%Y-%m-%d")
+                        label = dt.strftime("%A, %B %d, %Y")
+                    except ValueError:
+                        label = d
+                    story.append(Paragraph(label, sH2))
+                    for e in ents:
+                        e_title = (e["title_enhanced"] or e["title_raw"] or "").replace("&", "&amp;")
+                        e_desc = (e["description_enhanced"] or e["description_raw"] or "").replace("&", "&amp;").replace("<", "&lt;")
+                        cat = e["category"] or "Uncategorized"
+                        times = f"{e['start_time'] or '—'} – {e['end_time'] or '—'}"
+                        dur = format_duration(e["duration_minutes"])
+                        story.append(Paragraph(f"<b>{e_title}</b>", sBody))
+                        story.append(Paragraph(f"{times} &nbsp;•&nbsp; {dur} &nbsp;•&nbsp; <i>{cat}</i>", sMeta))
+                        story.append(Paragraph(e_desc.replace("\n", "<br/>"), sBody))
+                        story.append(Spacer(1, 2*mm))
+        else:
+            story.append(Paragraph("No entries found for the selected filters.", sBody))
+        story.append(Spacer(1, 8*mm))
+        story.append(HRFlowable(width="100%", thickness=0.5, color=HexColor("#E2E8F0")))
+        sFooter = ParagraphStyle('Footer', parent=styles['Normal'], fontSize=7, textColor=HexColor("#94A3B8"), alignment=TA_CENTER, spaceBefore=4)
+        story.append(Paragraph("— End of Report —  •  Confidential, internal use only", sFooter))
+        doc.build(story)
+        bio.seek(0)
+        fname = f"team_report_{date.today().isoformat()}.pdf"
         return send_file(bio, as_attachment=True, download_name=fname, mimetype="application/pdf")
     except Exception as e:
         return f"PDF generation failed: {e}. Try Word export instead. (Install wkhtmltopdf for best results.)", 500

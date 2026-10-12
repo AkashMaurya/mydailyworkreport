@@ -53,7 +53,7 @@ flask --app app run --host 0.0.0.0 --port 5000 --debug
 - **Flash messages**: flashed with `error`/`success` category
 
 ## Gotchas
-- **No test suite** — no automated tests exist
+- **pytest suite** in `tests/` — runs on a temp DB/session dir (never `instance/worklog.db`); run with `python -m pytest tests -v` (see README → Testing)
 - **No linter/formatter** — no flake8, ruff, or black configured
 - **PDF export** requires `wkhtmltopdf` system binary for best results; falls back to ReportLab automatically
 - **`.env` required** for `FLASK_SECRET_KEY` and `FERNET_KEY` — without them encryption falls back to a derived key from SECRET_KEY

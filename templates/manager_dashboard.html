@@ -9,6 +9,7 @@
       <p class="text-sm text-ink-500 mt-1">All team logs • Filter by person, date, category • Today's entries first</p>
     </div>
     <div class="flex gap-2">
+      <a href="{{ url_for('team_report', person=filters.person, date_from=filters.date_from, date_to=filters.date_to, category=filters.category) }}" class="px-4 py-2 rounded-xl bg-primary-600 text-white text-sm font-semibold hover:bg-primary-700">Combined report</a>
       <div class="px-4 py-2 rounded-xl bg-white border border-ink-200 text-sm"><span class="text-ink-500">Team</span> <span class="font-semibold text-ink-900 ml-1">{{ total_members }} members</span></div>
       <div class="px-4 py-2 rounded-xl bg-ink-900 text-white text-sm"><span class="opacity-70">Today</span> <span class="font-semibold ml-1">{{ total_today }} entries</span></div>
     </div>
@@ -53,6 +54,8 @@
             ⬇ Export ▾
           </button>
           <div x-cloak x-show="open" @click.outside="open=false" class="absolute right-0 mt-2 w-56 bg-white rounded-xl shadow-xl border border-ink-200 p-2 z-20">
+            <a href="{{ url_for('team_report', person=filters.person, date_from=filters.date_from, date_to=filters.date_to, category=filters.category) }}" class="flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-ink-50 text-sm font-medium"><span class="w-7 h-7 rounded-lg bg-primary-100 text-primary-700 flex items-center justify-center text-xs font-bold">👥</span> Combined team report</a>
+            <hr class="my-1.5 border-ink-100">
             <a href="{{ url_for('export_excel', person=filters.person, date_from=filters.date_from, date_to=filters.date_to, category=filters.category) }}" class="flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-ink-50 text-sm"><span class="w-7 h-7 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center text-xs font-bold">X</span> Excel (.xlsx)</a>
             <a href="{{ url_for('export_word', person=filters.person, date_from=filters.date_from, date_to=filters.date_to, category=filters.category) }}" class="flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-ink-50 text-sm"><span class="w-7 h-7 rounded-lg bg-blue-100 text-blue-700 flex items-center justify-center text-xs font-bold">W</span> Word (.docx)</a>
             <a href="{{ url_for('export_pdf', person=filters.person, date_from=filters.date_from, date_to=filters.date_to, category=filters.category) }}" class="flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-ink-50 text-sm"><span class="w-7 h-7 rounded-lg bg-rose-100 text-rose-700 flex items-center justify-center text-xs font-bold">P</span> PDF</a>
