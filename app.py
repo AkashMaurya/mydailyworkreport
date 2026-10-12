@@ -913,6 +913,48 @@ def manage_team():
                     msg = "Password updated."
                 finally:
                     conn.close()
+        elif action == "edit_manager":
+            uid_raw = request.form.get("user_id", "")
+            try:
+                uid = int(uid_raw)
+            except (TypeError, ValueError):
+                uid = None
+            name = request.form.get("name", "").strip()
+            email = request.form.get("email", "").strip().lower()
+            new_pw = request.form.get("new_password", "")
+            if uid is None:
+                err = "Invalid manager selected."
+            elif not name or not email:
+                err = "Name and email are required."
+            elif not re.match(r"[^@]+@[^@]+\.[^@]+", email):
+                err = "Invalid email format."
+            elif new_pw and len(new_pw) < 6:
+                err = "Password must be at least 6 characters."
+            else:
+                conn = get_connection()
+                try:
+                    clash = conn.execute(
+                        "SELECT id FROM users WHERE email=? COLLATE NOCASE", (email,)
+                    ).fetchone()
+                    if clash and clash["id"] != uid:
+                        err = "Email already exists."
+                    else:
+                        if new_pw:
+                            cur = conn.execute(
+                                "UPDATE users SET name=?, email=?, password_hash=? "
+                                "WHERE id=? AND role='manager'",
+                                (name, email, hash_password(new_pw), uid))
+                        else:
+                            cur = conn.execute(
+                                "UPDATE users SET name=?, email=? WHERE id=? AND role='manager'",
+                                (name, email, uid))
+                        conn.commit()
+                        if cur.rowcount:
+                            msg = "Manager account updated."
+                        else:
+                            err = "Manager not found."
+                finally:
+                    conn.close()
     conn = get_connection()
     try:
         members = conn.execute("SELECT id, name, email, created_at FROM users WHERE role='member' ORDER BY name").fetchall()
