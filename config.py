@@ -10,6 +10,16 @@ class Config:
     SECRET_KEY = os.getenv("FLASK_SECRET_KEY", "dev-secret-key-change-in-production-please-use-env")
     FERNET_KEY = os.getenv("FERNET_KEY", None)
     DATABASE_PATH = os.getenv("DATABASE_PATH", os.path.join(BASE_DIR, "instance", "worklog.db"))
+    # Database backend: "sqlite" (default; local dev + tests) or "postgres" (production).
+    # Postgres is only used when DB_BACKEND=postgres AND DATABASE_URL is set,
+    # so a DATABASE_URL sitting in a local .env never hijacks local development.
+    DB_BACKEND = os.getenv("DB_BACKEND", "sqlite").strip().lower()
+    DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
+    # Bootstrap manager created only when the users table is completely empty
+    # (first boot on a fresh production database). Never overwrites existing data.
+    BOOTSTRAP_MANAGER_NAME = os.getenv("MANAGER_NAME", "Manager").strip() or "Manager"
+    BOOTSTRAP_MANAGER_EMAIL = os.getenv("MANAGER_EMAIL", "manager@worklog.local").strip().lower()
+    BOOTSTRAP_MANAGER_PASSWORD = os.getenv("MANAGER_PASSWORD", "Manager123!")
     SESSION_TYPE = "filesystem"
     SESSION_FILE_DIR = os.path.join(BASE_DIR, "instance", "flask_session")
     SESSION_PERMANENT = True

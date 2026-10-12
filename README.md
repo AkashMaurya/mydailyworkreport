@@ -118,16 +118,17 @@ OPENROUTER_MODEL=openai/gpt-4o-mini
 DATABASE_PATH=instance/worklog.db
 ```
 
-### 4. Seed (first manager + sample data)
+### 4. Seed (first manager)
 ```bash
 python seed.py
 ```
-Creates:
-- **Manager**: `manager@worklog.local` / `Manager123!`
-- **Members**: `alex@worklog.local` / `Member123!`, `samir@worklog.local` / `Member123!`
-- Sample entries (5 across dates) with one enhanced example
+Creates the **Manager**: `manager@worklog.local` / `Manager123!` (idempotent — safe to re-run; skips existing emails).
 
-Idempotent — safe to re-run; skips existing emails.
+Demo members/entries are **opt-in only**:
+```bash
+SEED_SAMPLE_DATA=1 python seed.py   # adds alex@/samir@worklog.local + 10 sample entries
+```
+Production deploys never run this, and plain `python seed.py` can no longer resurrect demo accounts.
 
 ### 5. Run
 ```bash
@@ -293,6 +294,33 @@ What the suites protect:
 - Install `wkhtmltopdf` for best PDF fidelity: `sudo apt-get install wkhtmltopdf` (or brew). Without it, ReportLab fallback is used automatically.
 - Backup `instance/worklog.db` regularly; WAL mode enabled.
 - Rotate Fernet key with care (existing encrypted values need re-encryption).
+
+### Deploying to Render (SQLite → Neon Postgres)
+The app supports two backends. **SQLite** (default) for local dev/tests;
+**PostgreSQL (Neon)** for Render, because the Render filesystem is ephemeral —
+a SQLite file there is wiped on every deploy/restart.
+
+Render environment (Dashboard → Environment, not `.env`):
+
+| Variable | Value |
+|---|---|
+| `DB_BACKEND` | `postgres` (required — Postgres is only used when this **and** `DATABASE_URL` are set) |
+| `DATABASE_URL` | your Neon connection string (`postgresql://…neon.tech/neondb?sslmode=require`) |
+| `FLASK_SECRET_KEY` | fresh random 64-char string |
+| `FERNET_KEY` | fresh Fernet key (re-enter AI API key via Settings UI afterwards) |
+
+Notes:
+- Start command: `gunicorn app:app`. Do **not** run `seed.py` on Render — the
+  app bootstraps an empty database itself (`ensure_bootstrap_manager()` inserts
+  the default manager only when the `users` table is completely empty, and
+  logs a warning to change the default password). Set `MANAGER_EMAIL` /
+  `MANAGER_NAME` / `MANAGER_PASSWORD` env vars to customize that first account.
+- Data migration/sync from local SQLite: `python migrate_to_neon.py`
+  (idempotent upsert over HTTPS — works even where port 5432 is blocked;
+  `--check` for a read-only comparison). Re-run it after local changes to
+  push them to Neon.
+- Verify a live deploy: `GET /api/health` must report `"db_backend": "postgres"`.
+- The test suite always runs on a temporary SQLite DB and never touches Neon.
 
 ## Troubleshooting
 - **No Enhance** → Check Settings has valid `sk-or-v1-...` key; check OpenRouter balance; try model `openai/gpt-4o-mini`.

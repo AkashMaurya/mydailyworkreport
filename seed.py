@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """
-Seed script: creates the first manager account and sample data.
-Run once on initial setup:
-    python seed.py
-Idempotent: will not duplicate if manager email exists.
+Seed script: creates the first manager account (and, only when explicitly
+requested, sample members + sample entries).
+
+    python seed.py                      # manager only (safe default)
+    SEED_SAMPLE_DATA=1 python seed.py   # also add sample members + entries
+
+Idempotent: will not duplicate if the manager email exists. Never deletes.
 """
 import os
 import sys
@@ -12,7 +15,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Ensure app context
-from db import init_db, get_connection, get_setting, set_setting
+from db import init_db, get_connection, get_setting, set_setting, pg_enabled
 from config import Config
 import bcrypt
 
@@ -26,12 +29,15 @@ def ensure_user(name, email, password, role, created_by=None):
         if cur.fetchone():
             print(f"  • {email} already exists, skipping")
             return None
-        cur = conn.execute(
-            "INSERT INTO users(name, email, password_hash, role, created_by) VALUES(?,?,?,?,?)",
-            (name, email.lower(), hash_password(password), role, created_by)
-        )
+        sql = "INSERT INTO users(name, email, password_hash, role, created_by) VALUES(?,?,?,?,?)"
+        params = (name, email.lower(), hash_password(password), role, created_by)
+        if pg_enabled():
+            cur = conn.execute(sql + " RETURNING id", params)
+            uid = cur.fetchone()["id"]
+        else:
+            cur = conn.execute(sql, params)
+            uid = cur.lastrowid
         conn.commit()
-        uid = cur.lastrowid
         print(f"  ✓ Created {role}: {name} <{email}> (id={uid})")
         return uid
     finally:
@@ -66,19 +72,35 @@ def seed_entries(user_id):
 def main():
     print("Initializing database...")
     init_db()
-    print(f"DB path: {Config.DATABASE_PATH}")
-    print("\nSeeding users...")
+    print(f"Backend: {'PostgreSQL (Neon)' if pg_enabled() else 'SQLite'}")
+    if not pg_enabled():
+        print(f"DB path: {Config.DATABASE_PATH}")
+    print("\nSeeding manager...")
     manager_id = ensure_user("Priya Sharma", "manager@worklog.local", "Manager123!", "manager")
     if manager_id is None:
         # get existing manager id
         conn = get_connection()
         try:
-            cur = conn.execute("SELECT id FROM users WHERE email='manager@worklog.local' COLLATE NOCASE")
+            cur = conn.execute("SELECT id FROM users WHERE email=? COLLATE NOCASE", ("manager@worklog.local",))
             row = cur.fetchone()
             manager_id = row["id"] if row else None
         finally:
             conn.close()
-    # Sample members
+
+    # Sample members + entries are OPT-IN so production deploys can never
+    # resurrect demo accounts. Set SEED_SAMPLE_DATA=1 to create them.
+    if os.getenv("SEED_SAMPLE_DATA", "").strip() != "1":
+        print("\nSample data skipped (set SEED_SAMPLE_DATA=1 to seed demo members).")
+        print("\nDone.")
+        print("\nCredentials:")
+        print("  Manager → manager@worklog.local / Manager123!")
+        print("\nNext:")
+        print("  1. python app.py")
+        print("  2. Open http://localhost:5000 and log in")
+        print("  3. As manager, go to Team → add members / managers")
+        return
+
+    # Sample members (opt-in only)
     m1 = ensure_user("Alex Rivera", "alex@worklog.local", "Member123!", "member", created_by=manager_id)
     m2 = ensure_user("Samir Patel", "samir@worklog.local", "Member123!", "member", created_by=manager_id)
     # If already existed, fetch their ids for seeding check

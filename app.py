@@ -1,7 +1,6 @@
 import os
 import re
 import json
-import sqlite3
 from datetime import datetime, date, timedelta
 from functools import wraps
 from io import BytesIO
@@ -17,7 +16,8 @@ from flask_session import Session
 from config import Config
 from db import (
     init_db, get_connection, get_setting, set_setting,
-    get_decrypted_setting, set_encrypted_setting, encrypt_value, decrypt_value
+    get_decrypted_setting, set_encrypted_setting, encrypt_value, decrypt_value,
+    is_unique_violation, pg_enabled
 )
 
 app = Flask(__name__)
@@ -39,6 +39,37 @@ def check_password(pw: str, hashed: str) -> bool:
         return bcrypt.checkpw(pw.encode(), hashed.encode())
     except Exception:
         return False
+
+def ensure_bootstrap_manager():
+    """Create the initial manager account ONLY when the users table is empty.
+
+    Runs at startup so a fresh production database (e.g. Neon on Render) is
+    usable immediately. It never runs against a non-empty database and never
+    deletes or modifies existing users or entries.
+    """
+    conn = get_connection()
+    try:
+        row = conn.execute("SELECT COUNT(*) AS c FROM users").fetchone()
+        if row["c"]:
+            return None  # database already has users — do nothing
+        email = Config.BOOTSTRAP_MANAGER_EMAIL
+        pw = Config.BOOTSTRAP_MANAGER_PASSWORD
+        conn.execute(
+            "INSERT INTO users(name,email,password_hash,role) VALUES(?,?,?,?)",
+            (Config.BOOTSTRAP_MANAGER_NAME, email, hash_password(pw), "manager"),
+        )
+        conn.commit()
+        if pw == "Manager123!":
+            app.logger.warning(
+                "Bootstrapped manager %s with the DEFAULT password — change it "
+                "immediately from the UI (top nav → Change password).", email)
+        else:
+            app.logger.info("Bootstrapped manager account %s", email)
+        return email
+    finally:
+        conn.close()
+
+ensure_bootstrap_manager()
 
 def get_current_user():
     if "user_id" not in session:
@@ -841,7 +872,9 @@ def manage_team():
                         (name, email, hash_password(password), role, g.user["id"]))
                     conn.commit()
                     msg = f"Manager {name} added." if role == "manager" else f"Team member {name} added."
-                except sqlite3.IntegrityError:
+                except Exception as e:
+                    if not is_unique_violation(e):
+                        raise
                     err = "Email already exists."
                 finally:
                     conn.close()
@@ -2228,7 +2261,13 @@ def export_team_pdf():
 
 @app.route("/api/health")
 def health():
-    return jsonify({"status": "ok", "time": datetime.now().isoformat()})
+    return jsonify({
+        "status": "ok",
+        "time": datetime.now().isoformat(),
+        # "postgres" on Render (Neon), "sqlite" for local dev — handy to verify
+        # after a deploy that the app really picked up DATABASE_URL/DB_BACKEND.
+        "db_backend": "postgres" if pg_enabled() else "sqlite",
+    })
 
 # ---------- Error handlers ----------
 
